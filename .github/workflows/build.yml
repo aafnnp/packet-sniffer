@@ -336,7 +336,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: packet-sniffer-${{ matrix.name }}
-          path: dist/*
+          # 只发布成品：staging 是打包用的中间目录，wixpdb 是 WiX 的调试符号数据库。
+          path: |
+            dist/*
+            !dist/staging
+            !dist/*.wixpdb
           if-no-files-found: error
           retention-days: 14
 
