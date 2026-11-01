@@ -54,6 +54,10 @@ pub fn App() -> impl IntoElement {
     on_key("mod+f", move |_| key_filter.filter_ref.focus());
     let key_clear = ctx;
     on_key("mod+k", move |_| key_clear.act(|m| m.clear()));
+    let key_settings = ctx;
+    on_key("mod+,", move |_| {
+        key_settings.act(|m| m.set_view(View::Settings))
+    });
 
     view()
         .flex_1()

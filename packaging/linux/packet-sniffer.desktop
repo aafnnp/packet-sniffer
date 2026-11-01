@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Packet Sniffer
+Name[zh_CN]=Packet Sniffer 抓包工具
+GenericName=HTTP/HTTPS 抓包代理
+Comment=基于 NSH 原生 UI 的抓包工作台
+Exec=packet-sniffer-ui
+Icon=packet-sniffer
+Terminal=false
+Categories=Network;Development;
+Keywords=proxy;http;https;capture;mitm;sniffer;
+StartupNotify=true
+StartupWMClass=dev.packet-sniffer.app

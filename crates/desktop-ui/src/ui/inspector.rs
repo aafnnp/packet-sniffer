@@ -13,6 +13,7 @@ use crate::model::{RequestTab, ResponseTab};
 use crate::theme::{colors, highlight_color, radius, size};
 use crate::ui::icons::{IconName, icon, icon_reactive};
 use crate::ui::widgets::{Ctx, icon_button, tab_button};
+use nsh_base::editor::editor;
 
 pub fn inspector(ctx: Ctx) -> impl IntoElement {
     view()
@@ -345,10 +346,11 @@ fn request_pane(ctx: Ctx) -> impl IntoElement {
         .min_w(px(0.0))
         .h_full()
         .flex_col()
+        .overflow_hidden()
         .border_r_1()
         .border_r_color(colors::BORDER)
         .child(pane_tabs_request(ctx))
-        .child(scroll().flex_1().min_h(px(0.0)).child(request_content(ctx)))
+        .child(request_content(ctx))
 }
 
 fn response_pane(ctx: Ctx) -> impl IntoElement {
@@ -359,13 +361,9 @@ fn response_pane(ctx: Ctx) -> impl IntoElement {
         .min_w(px(0.0))
         .h_full()
         .flex_col()
+        .overflow_hidden()
         .child(pane_tabs_response(ctx))
-        .child(
-            scroll()
-                .flex_1()
-                .min_h(px(0.0))
-                .child(response_content(ctx)),
-        )
+        .child(response_content(ctx))
 }
 
 fn pane_tabs_request(ctx: Ctx) -> impl IntoElement {
@@ -433,33 +431,38 @@ fn pane_tabs_response(ctx: Ctx) -> impl IntoElement {
 }
 
 fn request_content(ctx: Ctx) -> impl IntoElement {
-    view().w_full().child(
-        when(
-            move || ctx.read(|m| m.detail.is_some()),
-            move || request_tabs_content(ctx),
+    view()
+        .flex_1()
+        .min_h(px(0.0))
+        .w_full()
+        .overflow_hidden()
+        .child(
+            when(
+                move || ctx.read(|m| m.detail.is_some()),
+                move || request_tabs_content(ctx),
+            )
+            .otherwise(|| scrolled(empty_detail())),
         )
-        .otherwise(empty_detail),
-    )
 }
 
 fn request_tabs_content(ctx: Ctx) -> impl IntoElement {
-    view().w_full().child(
+    view().flex_1().min_h(px(0.0)).w_full().child(
         when(
             move || ctx.read(|m| m.request_tab == RequestTab::Summary),
-            move || request_summary(ctx),
+            move || scrolled(request_summary(ctx)),
         )
         .otherwise({
             move || {
-                view().w_full().child(
+                view().flex_1().min_h(px(0.0)).w_full().child(
                     when(
                         move || ctx.read(|m| m.request_tab == RequestTab::Headers),
-                        move || header_table(ctx, true),
+                        move || scrolled(header_table(ctx, true)),
                     )
                     .otherwise({
                         move || {
-                            view().w_full().child(
+                            view().flex_1().min_h(px(0.0)).w_full().child(
                                 when(move || ctx.read(|m| m.request_tab == RequestTab::Query), {
-                                    move || query_table(ctx)
+                                    move || scrolled(query_table(ctx))
                                 })
                                 .otherwise(move || body_view(ctx, true)),
                             )
@@ -472,33 +475,43 @@ fn request_tabs_content(ctx: Ctx) -> impl IntoElement {
 }
 
 fn response_content(ctx: Ctx) -> impl IntoElement {
-    view().w_full().child(
-        when(
-            move || ctx.read(|m| m.detail.is_some()),
-            move || response_tabs_content(ctx),
+    view()
+        .flex_1()
+        .min_h(px(0.0))
+        .w_full()
+        .overflow_hidden()
+        .child(
+            when(
+                move || ctx.read(|m| m.detail.is_some()),
+                move || response_tabs_content(ctx),
+            )
+            .otherwise(|| scrolled(empty_detail())),
         )
-        .otherwise(empty_detail),
-    )
 }
 
 fn response_tabs_content(ctx: Ctx) -> impl IntoElement {
-    view().w_full().child(
+    view().flex_1().min_h(px(0.0)).w_full().child(
         when(
             move || ctx.read(|m| m.response_tab == ResponseTab::Summary),
-            move || response_summary(ctx),
+            move || scrolled(response_summary(ctx)),
         )
         .otherwise({
             move || {
-                view().w_full().child(
+                view().flex_1().min_h(px(0.0)).w_full().child(
                     when(
                         move || ctx.read(|m| m.response_tab == ResponseTab::Headers),
-                        move || header_table(ctx, false),
+                        move || scrolled(header_table(ctx, false)),
                     )
                     .otherwise(move || body_view(ctx, false)),
                 )
             }
         }),
     )
+}
+
+/// 可滚动的内容页（概要、首部、查询与纯文本正文）。
+fn scrolled(content: impl IntoElement) -> impl IntoElement {
+    scroll().flex_1().min_h(px(0.0)).child(content)
 }
 
 fn request_summary(ctx: Ctx) -> impl IntoElement {
@@ -815,56 +828,103 @@ fn query_table(ctx: Ctx) -> impl IntoElement {
 }
 
 fn body_view(ctx: Ctx, request: bool) -> impl IntoElement {
-    view().w_full().child(
+    view().flex_1().min_h(px(0.0)).w_full().child(
         when(
-            {
-                move || {
-                    ctx.read(|m| {
-                        if request {
-                            m.request_tab == RequestTab::Body || m.request_tab == RequestTab::Raw
-                        } else {
-                            m.response_tab == ResponseTab::Body
-                                || m.response_tab == ResponseTab::Raw
-                                || m.response_tab == ResponseTab::Json
-                        }
-                    })
-                }
-            },
-            {
-                move || {
-                    let text_value = {
-                        move || {
-                            ctx.read(|m| {
-                                m.detail.as_ref().map_or_else(String::new, |detail| {
-                                    let raw = if request {
-                                        m.request_tab == RequestTab::Raw
-                                    } else {
-                                        m.response_tab == ResponseTab::Raw
-                                    };
-                                    let body = match (request, raw) {
-                                        (true, true) => detail.request_raw.clone(),
-                                        (true, false) => detail.request_body.clone(),
-                                        (false, true) => detail.response_raw.clone(),
-                                        (false, false) => detail.response_body.clone(),
-                                    };
-                                    numbered(&body)
-                                })
-                            })
-                        }
-                    };
-                    view().w_full().p(px(8.0)).child(
-                        text(text_value)
-                            .w_full()
-                            .font_family(crate::theme::MONO)
-                            .text_size(px(10.5))
-                            .line_height(px(15.0))
-                            .text_color(colors::TEXT),
-                    )
-                }
+            move || body_visible(ctx, request),
+            move || {
+                when(
+                    move || !raw_body(ctx, request) && body_json(ctx, request).is_some(),
+                    move || json_body_view(ctx, request),
+                )
+                .otherwise(move || scrolled(plain_body(ctx, request)))
             },
         )
         .otherwise(view),
     )
+}
+
+fn body_visible(ctx: Ctx, request: bool) -> bool {
+    ctx.read(|m| {
+        if request {
+            m.request_tab == RequestTab::Body || m.request_tab == RequestTab::Raw
+        } else {
+            m.response_tab == ResponseTab::Body
+                || m.response_tab == ResponseTab::Raw
+                || m.response_tab == ResponseTab::Json
+        }
+    })
+}
+
+fn raw_body(ctx: Ctx, request: bool) -> bool {
+    ctx.read(|m| {
+        if request {
+            m.request_tab == RequestTab::Raw
+        } else {
+            m.response_tab == ResponseTab::Raw
+        }
+    })
+}
+
+/// body 的 JSON 美化文本；不是 JSON 时为 `None`。
+fn body_json(ctx: Ctx, request: bool) -> Option<String> {
+    ctx.read(|m| {
+        m.detail.as_ref().and_then(|detail| {
+            if request {
+                detail.request_json.clone()
+            } else {
+                detail.response_json.clone()
+            }
+        })
+    })
+}
+
+/// 带行号的纯文本正文（「原始」页与非 JSON 正文）。
+fn plain_body(ctx: Ctx, request: bool) -> impl IntoElement {
+    view().w_full().p(px(8.0)).child(
+        text(move || numbered(&body_text(ctx, request)))
+            .w_full()
+            .font_family(crate::theme::MONO)
+            .text_size(px(10.5))
+            .line_height(px(15.0))
+            .text_color(colors::TEXT),
+    )
+}
+
+/// JSON 正文：只读代码编辑器，自定义语法高亮、行号与折叠。
+fn json_body_view(ctx: Ctx, request: bool) -> impl IntoElement {
+    view().flex_1().min_h(px(0.0)).w_full().child(
+        editor()
+            .read_only(true)
+            .language(SharedString::from("json"))
+            .line_numbers(true)
+            .folding(true)
+            .active_line(false)
+            .indent_guides(false)
+            .tab_size(2u32)
+            .font_size(px(11.0))
+            .line_height(px(15.0))
+            .accessibility_label("JSON 正文")
+            .value(move || SharedString::from(body_json(ctx, request).unwrap_or_default()))
+            .size_full(),
+    )
+}
+
+fn body_text(ctx: Ctx, request: bool) -> String {
+    ctx.read(|m| {
+        let raw = if request {
+            m.request_tab == RequestTab::Raw
+        } else {
+            m.response_tab == ResponseTab::Raw
+        };
+        m.detail
+            .as_ref()
+            .map_or_else(String::new, |detail| match (request, raw) {
+                (true, true) => detail.request_raw.clone(),
+                (true, false) => detail.request_body.clone(),
+                (false, true) => detail.response_raw.clone(),
+                (false, false) => detail.response_body.clone(),
+            })
+    })
 }
 
 fn numbered(text: &str) -> String {

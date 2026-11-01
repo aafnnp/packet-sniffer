@@ -11,6 +11,11 @@ fn nss_db() -> String {
     format!("sql:{home}/.pki/nssdb")
 }
 
+/// 根证书是否已在当前用户的 NSS 数据库中。
+pub fn is_installed(common_name: &str) -> bool {
+    run("certutil", &["-d", &nss_db(), "-L", "-n", common_name]).is_ok()
+}
+
 pub fn install(cert_path: &Path, common_name: &str) -> Result<()> {
     let db = nss_db();
     let path = cert_path.display().to_string();

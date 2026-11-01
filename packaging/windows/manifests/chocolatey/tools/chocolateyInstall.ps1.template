@@ -1,0 +1,13 @@
+$ErrorActionPreference = 'Stop'
+
+$packageArgs = @{
+  packageName    = 'packet-sniffer'
+  fileType       = 'exe'
+  url64bit       = '__INSTALLER_URL__'
+  checksum64     = '__INSTALLER_SHA256__'
+  checksumType64 = 'sha256'
+  silentArgs     = '/S'
+  validExitCodes = @(0)
+}
+
+Install-ChocolateyPackage @packageArgs

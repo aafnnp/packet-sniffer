@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+PackageIdentifier: aafnnp.PacketSniffer
+PackageVersion: __VERSION__
+PackageLocale: zh-CN
+Publisher: __PUBLISHER__
+PublisherUrl: __HOMEPAGE__
+PublisherSupportUrl: __HOMEPAGE__/issues
+PackageName: Packet Sniffer
+PackageUrl: __HOMEPAGE__
+License: MIT
+LicenseUrl: __HOMEPAGE__/blob/master/LICENSE
+ShortDescription: 基于 NSH 原生 UI 的 HTTP/HTTPS 抓包代理工作台
+Description: 支持明文 HTTP 抓包、CONNECT 隧道与基础 MITM 解密，可接管系统代理并安装根证书。
+Moniker: packet-sniffer
+Tags:
+  - proxy
+  - http
+  - https
+  - capture
+  - mitm
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

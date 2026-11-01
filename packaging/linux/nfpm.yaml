@@ -1,0 +1,56 @@
+# 由 CI（.github/workflows/build.yml）调用，也可本地手动执行：
+#   NFPM_ARCH=amd64 NFPM_VERSION=0.1.0 NFPM_RELEASE=1 \
+#     nfpm package --config packaging/linux/nfpm.yaml --packager deb \
+#     --target dist/packet-sniffer_0.1.0-1_amd64.deb
+#
+# 依赖的二进制与文档由 CI 先放进 dist/staging/，路径相对仓库根目录。
+name: packet-sniffer
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${NFPM_VERSION}
+release: ${NFPM_RELEASE}
+section: net
+priority: optional
+maintainer: aafnnp <aafnnp@users.noreply.github.com>
+vendor: aafnnp
+homepage: https://github.com/aafnnp/package-sniffer
+license: MIT
+description: |
+  Packet Sniffer 是基于 NSH 原生 UI 的 HTTP/HTTPS 抓包代理工作台。
+  支持明文 HTTP 抓包、CONNECT 隧道与基础 MITM 解密，可接管系统代理并安装根证书。
+  安装后可从应用菜单启动图形界面，或在终端运行 packet-sniffer 命令。
+contents:
+  - src: dist/staging/packet-sniffer
+    dst: /usr/bin/packet-sniffer
+    file_info:
+      mode: 0755
+  - src: dist/staging/packet-sniffer-ui
+    dst: /usr/bin/packet-sniffer-ui
+    file_info:
+      mode: 0755
+  - src: packaging/linux/packet-sniffer.desktop
+    dst: /usr/share/applications/packet-sniffer.desktop
+    file_info:
+      mode: 0644
+  - src: packaging/linux/packet-sniffer.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/packet-sniffer.svg
+    file_info:
+      mode: 0644
+  - src: README.md
+    dst: /usr/share/doc/packet-sniffer/README.md
+  - src: LICENSE
+    dst: /usr/share/doc/packet-sniffer/copyright
+scripts:
+  postinstall: packaging/linux/postinstall.sh
+  postremove: packaging/linux/postinstall.sh
+overrides:
+  # 各发行版里 GTK4 的包名不同；装上它就会连带引入 glib / pango / cairo / gdk-pixbuf。
+  deb:
+    depends:
+      - libgtk-4-1
+  rpm:
+    depends:
+      - gtk4
+  archlinux:
+    depends:
+      - gtk4

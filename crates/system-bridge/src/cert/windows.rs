@@ -6,6 +6,14 @@ use tracing::info;
 
 use crate::{run, Result};
 
+/// 根证书是否已在当前用户的「受信任的根证书颁发机构」中。
+pub fn is_installed(common_name: &str) -> bool {
+    let name = common_name.to_ascii_lowercase();
+    run("certutil", &["-store", "-user", "Root", common_name])
+        .map(|output| output.to_ascii_lowercase().contains(&name))
+        .unwrap_or(false)
+}
+
 pub fn install(cert_path: &Path, _common_name: &str) -> Result<()> {
     let path = cert_path.display().to_string();
     run("certutil", &["-addstore", "-user", "Root", &path])?;

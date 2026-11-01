@@ -34,6 +34,11 @@ fn is_trusted(common_name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// 根证书是否已导入当前用户钥匙串、并获得 SSL 根信任。
+pub fn is_installed(common_name: &str) -> bool {
+    is_imported(common_name, &login_keychain()) && is_trusted(common_name)
+}
+
 pub fn install(cert_path: &Path, common_name: &str) -> Result<()> {
     let path = cert_path.display().to_string();
     let keychain = login_keychain();

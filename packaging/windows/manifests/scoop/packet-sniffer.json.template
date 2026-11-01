@@ -1,0 +1,32 @@
+{
+  "version": "__VERSION__",
+  "description": "基于 NSH 原生 UI 的 HTTP/HTTPS 抓包代理工作台",
+  "homepage": "__HOMEPAGE__",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "__PORTABLE_URL__",
+      "hash": "__PORTABLE_SHA256__"
+    }
+  },
+  "bin": [
+    "packet-sniffer.exe",
+    "packet-sniffer-ui.exe"
+  ],
+  "shortcuts": [
+    [
+      "packet-sniffer-ui.exe",
+      "Packet Sniffer"
+    ]
+  ],
+  "checkver": {
+    "github": "__HOMEPAGE__"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "__HOMEPAGE__/releases/download/v$version/packet-sniffer-$version-windows-x86_64.zip"
+      }
+    }
+  }
+}

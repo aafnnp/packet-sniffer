@@ -670,9 +670,15 @@ fn empty_state(ctx: Ctx) -> impl IntoElement {
                 .text_color(colors::TEXT),
         )
         .child(
-            text("启动代理、安装根证书，再把系统代理指向本机端口即可开始抓包。")
-                .text_size(px(12.0))
-                .text_color(colors::MUTED),
+            text(move || {
+                if ctx.read(|m| m.status.ca_installed) {
+                    "启动代理，再把系统代理指向本机端口即可开始抓包。".to_string()
+                } else {
+                    "启动代理、安装根证书，再把系统代理指向本机端口即可开始抓包。".to_string()
+                }
+            })
+            .text_size(px(12.0))
+            .text_color(colors::MUTED),
         )
         .child(
             when(
@@ -688,8 +694,14 @@ fn empty_state(ctx: Ctx) -> impl IntoElement {
                 accent_button("启动代理", move || start.act(|m| m.start_engine())).into_element()
             }),
         )
-        .child(subtle_button("安装根证书", move || {
-            install.act(|m| m.install_ca())
-        }))
+        .child(
+            when(
+                move || ctx.read(|m| m.status.ca_installed),
+                || view().into_element(),
+            )
+            .otherwise(move || {
+                subtle_button("安装根证书", move || install.act(|m| m.install_ca())).into_element()
+            }),
+        )
         .into_element()
 }

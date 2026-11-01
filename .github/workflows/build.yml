@@ -58,8 +58,8 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --locked
 
-  build:
-    name: Build ${{ matrix.name }}
+  package:
+    name: Package ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -68,15 +68,32 @@ jobs:
           - name: linux-x86_64
             os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+            targets: x86_64-unknown-linux-gnu
+            nfpm_arch: x86_64
+            deb_arch: amd64
+            rpm_arch: x86_64
+            arch_arch: x86_64
+            appimage_arch: x86_64
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            targets: aarch64-unknown-linux-gnu
+            nfpm_arch: arm64
+            deb_arch: arm64
+            rpm_arch: aarch64
+            arch_arch: aarch64
+            appimage_arch: aarch64
           - name: windows-x86_64
             os: windows-2022
             target: x86_64-pc-windows-msvc
-          - name: macos-aarch64
+            targets: x86_64-pc-windows-msvc
+            app_arch: x64
+          - name: macos-universal
             os: macos-14
             target: aarch64-apple-darwin
-          - name: macos-x86_64
-            os: macos-14
-            target: x86_64-apple-darwin
+            second_target: x86_64-apple-darwin
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+            app_arch: universal
     steps:
       - uses: actions/checkout@v4
 
@@ -95,39 +112,225 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.targets }}
 
       - uses: Swatinem/rust-cache@v2
         with:
           key: build-${{ matrix.name }}
           cache-on-failure: true
 
-      - name: Build release binaries
-        run: cargo build --release --locked --workspace --target ${{ matrix.target }}
+      # 标签构建直接用 v1.2.3 的版本号，其他构建追加提交号，保证每个产物可追溯。
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -n1)"
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="${base}+g$(git rev-parse --short HEAD)"
+          fi
+          case "$version" in
+            *-*) pkg_version="${version%%-*}"; pkg_release="${version#*-}" ;;
+            *)   pkg_version="$version";       pkg_release="1" ;;
+          esac
+          # MSI / pkg 的版本号只能是纯数字，去掉 +g<sha> 之类的构建元数据。
+          num_version="${pkg_version%%+*}"
+          {
+            echo "version=$version"
+            echo "pkg_version=$pkg_version"
+            echo "pkg_release=$pkg_release"
+            echo "num_version=$num_version"
+          } >> "$GITHUB_OUTPUT"
+          echo "版本：$version（deb/rpm 版本 $pkg_version-$pkg_release，MSI/pkg 版本 $num_version）"
 
-      - name: Package (Unix)
+      - name: Build release binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --workspace --target ${{ matrix.target }}
+          if [ -n "${{ matrix.second_target }}" ]; then
+            cargo build --release --locked --workspace --target ${{ matrix.second_target }}
+          fi
+
+      - name: Merge universal macOS binaries
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/universal/release
+          for bin in packet-sniffer packet-sniffer-ui; do
+            lipo -create \
+              "target/${{ matrix.target }}/release/$bin" \
+              "target/${{ matrix.second_target }}/release/$bin" \
+              -output "target/universal/release/$bin"
+            lipo -info "target/universal/release/$bin"
+          done
+
+      - name: Resolve binary directory
+        id: bins
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            echo "dir=target/universal/release" >> "$GITHUB_OUTPUT"
+          else
+            echo "dir=target/${{ matrix.target }}/release" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Stage binaries (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist staging
-          cp "target/${{ matrix.target }}/release/packet-sniffer" staging/
-          cp "target/${{ matrix.target }}/release/packet-sniffer-ui" staging/
-          cp README.md LICENSE staging/
-          tar -czf "dist/packet-sniffer-${{ matrix.name }}.tar.gz" -C staging .
+          mkdir -p dist/staging
+          cp "${{ steps.bins.outputs.dir }}/packet-sniffer" dist/staging/
+          cp "${{ steps.bins.outputs.dir }}/packet-sniffer-ui" dist/staging/
+          cp README.md LICENSE dist/staging/
 
-      - name: Package (Windows)
+      - name: Stage binaries (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path staging, dist | Out-Null
+          New-Item -ItemType Directory -Force -Path dist/staging | Out-Null
           Copy-Item -Path @(
-            "target/${{ matrix.target }}/release/packet-sniffer.exe",
-            "target/${{ matrix.target }}/release/packet-sniffer-ui.exe",
+            "${{ steps.bins.outputs.dir }}/packet-sniffer.exe",
+            "${{ steps.bins.outputs.dir }}/packet-sniffer-ui.exe",
             "README.md",
             "LICENSE"
-          ) -Destination staging
-          Compress-Archive -Path staging/* -DestinationPath "dist/packet-sniffer-${{ matrix.name }}.zip"
+          ) -Destination dist/staging
+
+      - name: Build portable archive (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -czf "dist/packet-sniffer-${{ steps.version.outputs.version }}-${{ matrix.name }}.tar.gz" \
+            -C dist/staging .
+
+      - name: Build portable archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/staging/* `
+            -DestinationPath "dist/packet-sniffer-${{ steps.version.outputs.version }}-${{ matrix.name }}.zip"
+
+      # 直接下载官方二进制，避开 apt 仓库不提供 arm64 的问题。
+      - name: Install nfpm
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          NFPM_TOOL_VERSION: 2.48.0
+          NFPM_TOOL_ARCH: ${{ matrix.nfpm_arch }}
+        run: |
+          set -euo pipefail
+          url="https://github.com/goreleaser/nfpm/releases/download/v${NFPM_TOOL_VERSION}/nfpm_${NFPM_TOOL_VERSION}_Linux_${NFPM_TOOL_ARCH}.tar.gz"
+          curl -fsSL --retry 3 --retry-delay 2 "$url" | sudo tar -xz -C /usr/local/bin nfpm
+          nfpm --version 2>&1 | head -n1
+
+      - name: Build Linux packages (deb / rpm / pacman)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          NFPM_ARCH: ${{ matrix.deb_arch }}
+          NFPM_VERSION: ${{ steps.version.outputs.pkg_version }}
+          NFPM_RELEASE: ${{ steps.version.outputs.pkg_release }}
+        run: |
+          set -euo pipefail
+          nfpm package --config packaging/linux/nfpm.yaml --packager deb \
+            --target "dist/packet-sniffer_${NFPM_VERSION}-${NFPM_RELEASE}_${{ matrix.deb_arch }}.deb"
+          nfpm package --config packaging/linux/nfpm.yaml --packager rpm \
+            --target "dist/packet-sniffer-${NFPM_VERSION}-${NFPM_RELEASE}.${{ matrix.rpm_arch }}.rpm"
+          nfpm package --config packaging/linux/nfpm.yaml --packager archlinux \
+            --target "dist/packet-sniffer-${NFPM_VERSION}-${NFPM_RELEASE}-${{ matrix.arch_arch }}.pkg.tar.zst"
+          ls -l dist
+
+      - name: Build Linux AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          packaging/linux/make-appimage.sh dist/staging \
+            "${{ steps.version.outputs.version }}" \
+            "${{ matrix.appimage_arch }}" \
+            dist
+          ls -l dist
+
+      - name: Build macOS packages (dmg / pkg)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          packaging/macos/make-packages.sh "${{ steps.bins.outputs.dir }}" \
+            "${{ steps.version.outputs.version }}" \
+            "${{ matrix.app_arch }}" \
+            dist
+          ls -l dist
+
+      - name: Install NSIS
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nsis -y --no-progress
+          'C:\Program Files (x86)\NSIS' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Build Windows installer (NSIS)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $root = (Get-Location).Path -replace '\\', '/'
+          $out = Join-Path (Get-Location) "dist\PacketSniffer-${{ steps.version.outputs.version }}-${{ matrix.app_arch }}-setup.exe"
+          makensis -V2 `
+            "/DAPP_VERSION=${{ steps.version.outputs.version }}" `
+            "/DOUTFILE=$out" `
+            "/DSTAGE_DIR=$root/dist/staging" `
+            "/DDOCS_DIR=$root" `
+            packaging\windows\installer.nsi
+          if (-not (Test-Path $out)) { throw "NSIS 未生成安装包：$out" }
+
+      # WiX v6 起需要接受 OSMF 许可（商业使用需付费），因此固定在最后的 5.x 版本。
+      - name: Install WiX
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.*
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Build Windows MSI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $root = (Get-Location).Path -replace '\\', '/'
+          $msi = Join-Path (Get-Location) "dist\PacketSniffer-${{ steps.version.outputs.version }}-${{ matrix.app_arch }}.msi"
+          wix build -arch x64 `
+            -d "SourceDir=$root/dist/staging" `
+            -d "ProductVersion=${{ steps.version.outputs.num_version }}" `
+            -o $msi `
+            packaging\windows\product.wxs
+          if (-not (Test-Path $msi)) { throw "WiX 未生成 MSI：$msi" }
+          Get-Item $msi | Format-Table Name, Length
+
+      # 管理安装（msiexec /a）只解包不注册，用来确认 MSI 数据库与载荷完整。
+      - name: Smoke test MSI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem dist -Filter '*.msi' | Select-Object -First 1).FullName
+          $extract = Join-Path $env:RUNNER_TEMP 'msi-extract'
+          $proc = Start-Process msiexec.exe -Wait -PassThru `
+            -ArgumentList "/a `"$msi`" /qn TARGETDIR=`"$extract`""
+          if ($proc.ExitCode -ne 0) { throw "msiexec /a 失败：$($proc.ExitCode)" }
+          $found = Get-ChildItem -Path $extract -Recurse -Filter 'packet-sniffer-ui.exe'
+          if (-not $found) { throw "MSI 载荷中找不到 packet-sniffer-ui.exe" }
+          $found | Format-Table FullName, Length
+
+      - name: Generate package manager manifests
+        if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          packaging\windows\make-manifests.ps1 `
+            -Version ${{ steps.version.outputs.version }} `
+            -DistDir dist
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -136,3 +339,38 @@ jobs:
           path: dist/*
           if-no-files-found: error
           retention-days: 14
+
+  release:
+    name: Publish release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [test, package]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publish release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" \
+              --title "$TAG" --generate-notes
+          fi

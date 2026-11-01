@@ -238,6 +238,7 @@ fn appearance_button(ctx: Ctx, value: AppearanceSetting, label: &'static str) ->
 
 fn cert_section(ctx: Ctx) -> impl IntoElement {
     let install = { move || ctx.act(|m| m.install_ca()) };
+    let reinstall = { move || ctx.act(|m| m.install_ca()) };
     let export = { move || ctx.act(|m| m.export_ca()) };
     card()
         .child(section_heading(
@@ -272,14 +273,53 @@ fn cert_section(ctx: Ctx) -> impl IntoElement {
         .child(
             view()
                 .flex_row()
+                .items_center()
                 .gap(px(8.0))
-                .child(accent_button("安装到系统", install))
+                .child(
+                    when(
+                        move || ctx.read(|m| m.status.ca_installed),
+                        move || {
+                            view()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(5.0))
+                                .child(icon(IconName::Check, 14.0, colors::GREEN))
+                                .child(
+                                    text("已安装到系统信任存储")
+                                        .text_size(px(11.5))
+                                        .text_color(colors::GREEN),
+                                )
+                                .into_element()
+                        },
+                    )
+                    .otherwise(move || accent_button("安装到系统", install).into_element()),
+                )
+                .child(view().flex_1())
+                .child(
+                    when(
+                        move || ctx.read(|m| m.status.ca_installed),
+                        move || subtle_button("重新安装", reinstall).into_element(),
+                    )
+                    .otherwise(view),
+                )
                 .child(subtle_button("导出到下载目录", export)),
         )
         .child(
-            text("macOS 会提示输入管理员密码；Windows 安装到「受信任的根证书颁发机构」。")
-                .text_size(px(10.5))
-                .text_color(colors::FAINT),
+            when(
+                move || ctx.read(|m| m.status.ca_installed),
+                || {
+                    text("系统已信任该证书，抓取 HTTPS 流量时不会再提示安装。")
+                        .text_size(px(10.5))
+                        .text_color(colors::FAINT)
+                        .into_element()
+                },
+            )
+            .otherwise(|| {
+                text("macOS 会提示输入管理员密码；Windows 安装到「受信任的根证书颁发机构」。")
+                    .text_size(px(10.5))
+                    .text_color(colors::FAINT)
+                    .into_element()
+            }),
         )
 }
 

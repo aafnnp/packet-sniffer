@@ -1,344 +1,380 @@
-# Packet Sniffer：基于 NSH 的本地 HTTPS 抓包工具
+# Packet Sniffer
 
 [![Build](https://github.com/aafnnp/package-sniffer/actions/workflows/build.yml/badge.svg)](https://github.com/aafnnp/package-sniffer/actions/workflows/build.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-整体采用 **Rust Workspace 多包架构**，严格遵循「引擎与 UI 完全解耦」原则：抓包核心独立成库、可单独测试与命令行运行；桌面界面使用 [NSH](https://nsh.dev/zh-CN/docs/) 的 Rust 组件，在 macOS / Windows / Linux 上渲染为原生视图，不携带 QuickJS。界面布局参考 [Proxyman](https://proxyman.com/)：左侧来源列表、中间请求表格、底部请求 / 响应并列检查器。
+本地 HTTP / HTTPS 抓包与调试工具。抓包引擎是独立的 Rust 库，界面使用 [NSH](https://nsh.dev/zh-CN/docs/) 的 Rust 原生组件（macOS AppKit / Windows / Linux GTK4），**不包含 TSX、QuickJS 或 JS 运行时**。布局参考 [Proxyman](https://proxyman.com/)：左侧来源列表、中间请求表格、底部请求 / 响应并列检查器。
+
+```
+客户端 ──► packet-sniffer (127.0.0.1:8899)
+             ├─ 明文 HTTP ───────────────────────► 上游
+             └─ CONNECT → MITM (rustls) ─────────► 上游（可经链式代理）
+                    │
+        EngineEvent (broadcast) → EventBridge (async-channel)
+                    │
+        App / Model 状态机 ──► NSH 原生界面 / 终端输出
+                    │
+        MemoryStore（默认 2000 条）+ HistoryStore（SQLite）
+```
 
 ---
 
-## 一、完整项目目录结构
+## 一、功能特性
+
+| 能力 | 说明 |
+|------|------|
+| HTTP 代理 | HTTP/1.1 明文转发，HTTP / HTTPS 统一抓取 |
+| HTTPS 解密 | CONNECT 隧道 + MITM；首次启动生成根 CA，按 SNI 动态签发带 SAN 的叶子证书（缓存上限 512 个） |
+| 只转发模式 | 关闭解密后 CONNECT 仅做透明隧道转发 |
+| 响应体解压 | 自动解开 `gzip` / `deflate` / `br`，并按解码后的内容展示 |
+| 链式代理 | 把请求先交给上游 HTTP 代理（企业代理、Clash / MonoProxy 等），支持 `host:port` 形式的内嵌 Basic 认证 |
+| 自定义上游信任根 | 上游已被企业代理二次拦截时，可追加 PEM 根证书，无需关闭证书校验 |
+| 规则引擎 | 按方法 / URL 子串 / 域名后缀匹配，执行阻断、模拟响应、请求或响应首部增改 |
+| 请求记录 | 内存环形存储；图形界面另行写入 SQLite（WAL）持久化历史、高亮与备注，重启后恢复 |
+| 系统集成 | 接管 / 释放系统代理，安装 / 移除根证书，按平台条件编译 |
+| 双形态运行 | `packet-sniffer`（headless CLI）与 `packet-sniffer-ui`（NSH 原生图形界面）共用同一套状态机与事件桥 |
+| 跨平台 | macOS（Apple Silicon / Intel）、Windows x86_64、Linux x86_64 |
+
+## 二、Workspace 结构
+
 ```
-packet-sniffer/
-├── Cargo.toml                  # Workspace 根配置，统一管理依赖版本
+Proxy/
+├── Cargo.toml                  # workspace 清单，统一管理依赖版本；release 使用 thin LTO + codegen-units=1
 ├── Cargo.lock
-├── README.md
-├── .gitignore
-│
-├── assets/                     # 静态资源（图标、证书说明、主题示例）
-│
-├── crates/                     # Rust 核心包（按职责拆分）
-│   ├── common/                 # 公共类型与工具，所有包共享
+├── LICENSE                     # MIT
+├── assets/
+│   ├── cert/README.md          # 可选的固定根证书说明（默认在运行时生成）
+│   └── themes/default-dark.json
+├── scripts/
+│   └── verify.sh               # 端到端自检脚本
+├── crates/
+│   ├── common/                 # 跨包共享类型与工具，不依赖网络 / TLS / UI
+│   │   └── src/{types,error,utils}.rs
 │   ├── proxy-engine/           # 抓包核心引擎，纯逻辑、无 UI 依赖
-│   │   ├── src/{proxy,mitm,protocol,store}/
-│   │   └── src/rules.rs        # 规则匹配与动作（阻断 / 模拟 / 改首部）
-│   ├── system-bridge/          # 系统代理与根证书，按平台条件编译
-│   ├── desktop/                # 命令行入口 + 共享状态机
-│   │   ├── src/lib.rs          # 导出 app / bridge / state
-│   │   ├── src/main.rs         # packet-sniffer CLI
+│   │   ├── src/config.rs       # EngineConfig / UpstreamProxy 与默认值
+│   │   ├── src/rules.rs        # 规则匹配与动作
+│   │   ├── src/protocol/       # http1 解析、body 录制包装、响应体解压
+│   │   ├── src/proxy/          # tcp 监听、http 转发、CONNECT 隧道、上游连接
+│   │   ├── src/mitm/           # 根 CA 管理（ca.rs）与 TLS 握手（tls.rs）
+│   │   ├── src/store/          # 内存存储 MemoryStore
+│   │   └── tests/proxy_e2e.rs  # 端到端集成测试
+│   ├── system-bridge/          # 系统代理与根证书，按 `cfg(target_os)` 条件编译
+│   ├── desktop/                # headless CLI + 共享状态机（库）
+│   │   ├── src/main.rs         # packet-sniffer：子命令解析与终端输出
 │   │   ├── src/app.rs          # 与 UI 无关的状态与事件分发
-│   │   ├── src/bridge/         # 引擎事件 → UI 的异步通道
-│   │   ├── src/storage.rs      # SQLite 历史记录、高亮与备注
-│   │   └── src/state/          # 请求列表、设置持久化
-│   └── desktop-ui/             # NSH 原生图形界面（Rust 组件，无 JS 运行时）
-│       ├── nsh.json            # NSH 应用描述：根组件 App
-│       ├── src/main.rs         # 挂载 NSH 应用
-│       ├── src/lib.rs          # 根组件、定时器与快捷键
-│       ├── src/model.rs        # 引擎生命周期、筛选、选中与详情
-│       ├── src/format.rs       # 时间 / 大小 / body / UA 格式化
-│       ├── src/theme.rs        # Proxyman 风格配色与密度
+│   │   ├── src/bridge/         # 引擎事件 → async-channel 事件桥
+│   │   ├── src/state/          # 请求列表、设置读写
+│   │   └── src/storage.rs      # SQLite 历史记录、高亮与备注（供图形界面使用）
+│   └── desktop-ui/             # NSH 原生图形界面
+│       ├── nsh.json            # NSH 应用描述（根组件 App）
+│       ├── src/main.rs         # 挂载平台后端并启动窗口
+│       ├── src/lib.rs          # 根组件、120ms 轮询与快捷键
+│       ├── src/model.rs        # 引擎生命周期、筛选、排序、选中与详情
+│       ├── src/{format,theme}.rs
 │       └── src/ui/             # chrome / table / inspector / settings / rules / widgets / icons
-│
 └── ui-legacy/                  # 早期 TSX 原型，仅作设计参考，不参与构建
 ```
 
-### 架构设计关键点
-1. **职责隔离**：`proxy-engine` 不依赖任何 UI 或系统 GUI 库，可单独编译、命令行运行，便于单元测试与后续复用。
-2. **统一数据模型**：所有跨层数据结构定义在 `common` 包中，避免类型重复定义与转换开销。
-3. **平台隔离**：系统相关能力全部收敛在 `system-bridge`，通过条件编译区分平台，上层调用统一接口。
-4. **异步解耦**：引擎运行在独立的 tokio 异步线程池，通过消息通道向 UI 推送事件，不阻塞 NSH 主线程渲染。
+### 设计要点
 
----
+1. **引擎与 UI 解耦**：`proxy-engine` 不依赖任何 UI 或系统 GUI 库，可单独编译与测试。
+2. **统一数据模型**：`CapturedRequest` / `CapturedResponse` / `CapturedExchange` / `EngineEvent` 全部定义在 `common`，避免重复定义与转换。
+3. **平台隔离**：系统能力收敛在 `system-bridge`，上层只调用统一接口。
+4. **异步解耦**：引擎在 tokio 运行时中通过 `broadcast` 推送事件，`EventBridge` 转成 `async-channel`，UI 用 120ms 定时器批量搬运，不阻塞渲染线程。
 
-## 二、核心依赖清单（按模块分类）
-### 1. 公共基础依赖（所有包通用）
-| 依赖包 | 版本建议 | 用途说明 | 必选 |
-|--------|----------|----------|------|
-| `serde` | `1.0` | 序列化/反序列化，配合 `derive` 宏为结构体添加序列化能力 | 是 |
-| `serde_json` | `1.0` | JSON 格式解析与格式化，用于请求体展示与数据持久化 | 是 |
-| `thiserror` | `1.0` | 自定义错误类型，定义业务错误枚举 | 是 |
-| `anyhow` | `1.0` | 通用错误处理，简化原型开发阶段的错误传递 | 是 |
-| `chrono` | `0.4` | 时间处理，记录请求时间戳、格式化展示 | 是 |
-| `uuid` | `1.0` | 为每个请求生成唯一 ID，便于列表索引与详情查询 | 是 |
-| `tracing` | `0.1` | 结构化日志，替代 `println!`，支持分级日志与异步输出 | 是 |
-| `tracing-subscriber` | `0.3` | 日志订阅器，控制台与文件日志输出 | 是 |
+### 主要依赖
 
-### 2. 抓包引擎核心依赖（proxy-engine）
-| 依赖包 | 版本建议 | 用途说明 | 必选 |
-|--------|----------|----------|------|
-| `tokio` | `1.0` | 全异步运行时，启用 `full` 特性，负责 TCP 网络 IO、并发调度、超时控制 | 是 |
-| `tokio-util` | `0.7` | 提供 `Framed`、`Codec` 等流式工具，简化 HTTP 协议解析 | 是 |
-| `rustls` | `0.23` | 纯 Rust 实现的 TLS 协议栈，替代 OpenSSL，跨平台编译零依赖 | 是 |
-| `rustls-pki-types` | `0.1` | TLS 证书类型定义，配合 rustls 使用 | 是 |
-| `rcgen` | `0.13` | 证书生成库，实现根 CA 管理、动态域名证书签发（带 SAN 字段） | 是 |
-| `hyper` | `1.0` | HTTP/1.1 + HTTP/2 协议解析，支持流式 Body 与多路复用 | 是 |
-| `http` | `1.0` | 标准 HTTP 类型定义（Request/Response/HeaderMap），与 hyper 兼容 | 是 |
-| `flate2` | `1.0` | gzip / deflate 响应体解压 | 是 |
-| `brotli` | `6.0` | brotli 响应体解压 | 是 |
-| `url` | `2.0` | URL 解析、域名提取、路径规范化 | 是 |
-| `bytes` | `1.0` | 高效字节缓冲区，零拷贝处理请求/响应体 | 是 |
-| `once_cell` | `1.0` | 全局单例初始化，如根证书、配置项 | 是 |
-| `rusqlite` | `0.41` | SQLite 持久化，保存历史请求、高亮与备注 | 是 |
-| `tokio-tungstenite` | `0.21` | WebSocket 帧解析（进阶协议扩展可选） | 否 |
-| `protobuf` | `3.0` | Protobuf 解码，用于 gRPC 协议支持（进阶可选） | 否 |
+| 领域 | 依赖 |
+|------|------|
+| 异步与网络 | `tokio`（full）、`hyper` 1.0、`hyper-util`、`http`、`http-body-util`、`bytes` |
+| TLS | `rustls` 0.23（ring）、`tokio-rustls` 0.26、`rustls-pki-types`、`rustls-pemfile`、`webpki-roots`、`rcgen` 0.13 |
+| 数据处理 | `serde` / `serde_json`、`flate2`（gzip / deflate）、`brotli` |
+| 存储与并发 | `rusqlite` 0.41（bundled）、`indexmap`、`async-channel` |
+| 日志与错误 | `tracing`、`tracing-subscriber`、`thiserror`、`anyhow`、`chrono`、`uuid` |
+| 原生界面 | `nsh-core` / `nsh-base` / `nsh-platform-macos` / `nsh-platform-linux` / `nsh-platform-windows` 0.3.0 |
 
-### 3. NSH UI 层依赖（desktop-ui）
-| 依赖包 | 版本 | 用途说明 | 必选 |
-|--------|------|----------|------|
-| `nsh-core` | `0.3.0` | 原生元素、signal、布局与事件；`#[component]` 过程宏 | 是 |
-| `nsh-base` | `0.3.0` | 输入框、菜单、主题 token、可调整分栏等基础组件 | 是 |
-| `nsh-platform-macos` | `0.3.0` | macOS AppKit 后端（Windows / Linux 换对应平台包） | 是 |
-| `tokio` | `1.0` | UI 进程内启动引擎运行时 | 是 |
-| `async-channel` | `2.0` | 引擎事件 → UI 的事件桥 | 是 |
-| `indexmap` | `2.0` | 有序请求列表与完整记录存储 | 是 |
+## 三、环境要求
 
-> 说明：界面完全由 Rust 编写，不包含 TSX、QuickJS 或 `nsh-build`。依赖版本与 [nsh.dev 官方文档](https://nsh.dev/zh-CN/docs/) 的 0.3 系列一致。
+- **Rust stable**：`desktop-ui` 使用 edition 2024，需要 Rust 1.85 及以上（CI 使用 stable）。
+- **macOS**：CI 以 `MACOSX_DEPLOYMENT_TARGET=14.0` 构建。
+- **Windows**：MSVC 工具链（`x86_64-pc-windows-msvc`）。
+- **Linux**：NSH 的 GTK4 后端需要以下开发包：
 
-### 4. 系统适配层依赖（system-bridge）
-采用**平台条件编译**，仅对应系统编译对应依赖，不跨平台冗余引入。
-
-#### macOS 平台
-| 依赖包 | 用途说明 |
-|--------|----------|
-| `security-framework` | 操作 macOS 钥匙串，实现根证书一键安装、信任与删除 |
-| `system-configuration` | 调用系统网络配置 API，设置/取消全局 HTTP/HTTPS 代理 |
-| `objc` / `objc2` | 可选，用于调用原生 Objective-C API，处理更复杂的系统交互 |
-
-#### Windows 平台
-| 依赖包 | 用途说明 |
-|--------|----------|
-| `windows` | 微软官方 Rust 绑定，调用 Win32 API 操作证书存储、注册表代理设置 |
-| `winreg` | 轻量级注册表操作库，快速修改系统代理配置 |
-
-#### Linux 平台
-| 依赖包 | 用途说明 |
-|--------|----------|
-| `dbus` | 通过 D-Bus 调用 NetworkManager 设置系统代理 |
-
----
-
-## 三、关键配置文件示例
-### 1. 根目录 `Cargo.toml`（Workspace 配置）
-```toml
-[workspace]
-members = [
-    "crates/common",
-    "crates/proxy-engine",
-    "crates/system-bridge",
-    "crates/desktop",
-    "crates/desktop-ui",
-]
-resolver = "2"
-
-[workspace.package]
-edition = "2021"
-version = "0.1.0"
-license = "MIT"
-
-[workspace.dependencies]
-# 公共基础
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-thiserror = "1.0"
-anyhow = "1.0"
-chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1.0", features = ["v4", "serde"] }
-tracing = "0.1"
-tracing-subscriber = "0.3"
-bytes = "1.0"
-async-channel = "2.0"
-indexmap = { version = "2.0", features = ["serde"] }
-
-# 网络与TLS
-tokio = { version = "1.0", features = ["full"] }
-tokio-util = { version = "0.7", features = ["codec"] }
-rustls = "0.23"
-rcgen = "0.13"
-hyper = { version = "1.0", features = ["full"] }
-http = "1.0"
-url = "2.0"
-flate2 = "1.0"
-brotli = "6.0"
-```
-
-### 2. `proxy-engine/Cargo.toml` 示例
-```toml
-[package]
-name = "proxy-engine"
-edition.workspace = true
-version.workspace = true
-
-[dependencies]
-common = { path = "../common" }
-# 从 workspace 继承版本
-tokio.workspace = true
-tokio-util.workspace = true
-rustls.workspace = true
-rcgen.workspace = true
-hyper.workspace = true
-http.workspace = true
-url.workspace = true
-flate2.workspace = true
-brotli.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-thiserror.workspace = true
-anyhow.workspace = true
-tracing.workspace = true
-bytes.workspace = true
-uuid.workspace = true
-chrono.workspace = true
-```
-
-### 3. `desktop-ui/Cargo.toml` 示例
-```toml
-[package]
-name = "desktop-ui"
-edition = "2024"
-
-[[bin]]
-name = "packet-sniffer-ui"
-path = "src/main.rs"
-
-[dependencies]
-desktop = { path = "../desktop" }
-common = { path = "../common" }
-proxy-engine = { path = "../proxy-engine" }
-system-bridge = { path = "../system-bridge" }
-
-nsh-core.workspace = true
-nsh-base.workspace = true
-tokio.workspace = true
-async-channel.workspace = true
-chrono.workspace = true
-
-[target.'cfg(target_os = "macos")'.dependencies]
-nsh-platform-macos.workspace = true
-```
-
----
-
-## 四、MVP 起步裁剪建议
-如果是第一阶段快速跑通原型，可按以下顺序裁剪，降低初始复杂度：
-1. **引擎层**：先不接入 SQLite，用 `Vec` + `HashMap` 做内存存储；暂不实现 HTTP/2、WebSocket，只支持 HTTP/1.1。
-2. **系统层**：先通过命令调用 `networksetup`（macOS）或修改注册表（Windows）实现代理设置，不引入复杂系统框架依赖。
-3. **UI层**：先实现「列表 + 详情 + 工具栏」基础布局，过滤、搜索、格式化等功能后续迭代。
-4. **证书管理**：先支持手动导出证书文件，引导用户手动安装，一键安装功能放在第二阶段。
-
----
-
----
-
-## 五、当前落地实现说明
-第一阶段（MVP）与原生界面已落地，`cargo test --workspace`、`cargo fmt --check` 通过；`cargo clippy` 仅剩 `proxy-engine` 中未使用的 `ProxyContext::log` 提示。
-
-### 1. 已实现范围
-| 模块 | 状态 | 说明 |
-|------|------|------|
-| `crates/common` | ✅ | `CapturedRequest/Response/Exchange`、`EngineEvent`、统一错误与工具函数 |
-| `crates/proxy-engine` | ✅ | HTTP/1.1 明文代理、CONNECT 隧道、HTTPS 基础 MITM（按 SNI 动态签发证书）、gzip/deflate/brotli 解压、内存存储、规则引擎（阻断 / 模拟响应 / 增改首部） |
-| `crates/system-bridge` | ✅ | 系统代理开关与根证书安装/移除，按平台条件编译 |
-| `crates/desktop` | ✅ | 命令行子命令、引擎生命周期、事件桥、设置持久化、SQLite 历史 / 高亮 / 备注与共享状态机 |
-| `crates/desktop-ui` | ✅ | NSH 原生界面：Proxyman 风格三栏布局、虚拟滚动请求表、请求 / 响应检查器、高亮备注、规则页、设置页 |
-| `ui-legacy/` | 📦 参考 | 早期 TSX 原型，不参与构建 |
-
-运行时数据流：`ProxyEngine::run`（tokio）→ `broadcast` 事件 → `EventBridge`（`async-channel`）→ `App` 状态机 → UI / 终端输出。
-请求完成后由 `desktop::storage` 写入 `~/.packet-sniffer/history.db`（WAL 模式，后台线程写入），启动时恢复最近记录与备注。
-
-### 2. 与原始规划的必要偏差
-1. **界面使用 NSH 0.3 的 Rust 组件**：`nsh-core` / `nsh-base` / `nsh-platform-*` 已发布；界面不经过 TSX 或 QuickJS，直接用 `cargo run -p desktop-ui` 启动 macOS AppKit 窗口，`nsh run crates/desktop-ui` 可用于打包。
-2. **补充的依赖**：`tokio-rustls`（rustls 的异步 IO 适配，仅 `rustls` 无法做 IO）、`rustls-pemfile`（读取 PEM 根证书）、
-   `webpki-roots`（上游证书校验）、`hyper-util`（`TokioIo` 适配）、`http-body-util`（body 组合）。
-3. **版本修正**：`rustls-pki-types` 使用 `1.x`（README 中的 `0.1` 与 rustls 0.23 不兼容）；
-   `rcgen` 需额外启用 `x509-parser` 特性，才能重新加载已落盘的根证书。
-4. **system-bridge 采用命令调用**：按「MVP 起步裁剪建议」第 2 条，macOS 走 `networksetup` / `security`，
-   Windows 走 `reg` / `certutil`，Linux 走 `gsettings` / `certutil`，未引入 `security-framework`、`windows`、`dbus` 等重型依赖。
-5. **新增两个模块文件**：`protocol/body.rs`（边转发边录制的 body 包装器，保证抓包不改变转发语义）、
-   `proxy/upstream.rs`（明文 / TLS 上游连接统一类型）。
-
-### 3. 使用方式
 ```bash
-# 图形界面（NSH 原生窗口，默认自动启动代理）
+sudo apt-get update
+sudo apt-get install -y libgtk-4-dev libpango1.0-dev libgdk-pixbuf-2.0-dev \
+  libcairo2-dev libglib2.0-dev pkg-config
+```
+
+可选：安装 NSH CLI（`nsh`）用于 `nsh run` / 打包；直接 `cargo run` 不需要它。
+
+## 四、快速开始
+
+> 不想从源码编译？Release 页面提供 `.deb`、`.rpm`、pacman 包、AppImage、`.dmg`、`.pkg`、`.exe`、`.msi` 等安装包，装好即用，详见 [十一、CI 与构建产物](#十一ci-与构建产物)。
+
+### 1. 图形界面（推荐）
+
+```bash
+# 启动 NSH 原生窗口，默认监听 127.0.0.1:8899 并自动启动引擎
 cargo run -p desktop-ui
 
-# 或者用 NSH 0.3.0+ 运行 / 打包（cargo run 不需要 nsh CLI）
+# 或用 NSH CLI 运行 / 打包
 nsh run crates/desktop-ui
+```
 
-# 命令行（headless，事件打印到终端）
-cargo run -p desktop -- run --port 8899
+### 2. 命令行（headless）
 
-# 导出并安装根证书（HTTPS 解密必需）
-cargo run -p desktop -- export-ca --out root-ca.pem
-cargo run -p desktop -- install-ca
+```bash
+cargo run -p desktop -- run --port 8899          # 事件打印到终端
+cargo run -p desktop -- run --json               # 额外输出完整记录的 JSON 行
+cargo run -p desktop -- --help                   # 查看全部参数
+```
 
-# 接管 / 释放系统代理
+### 3. 信任根证书
+
+HTTPS 解密要求系统信任本机根证书，首次运行时自动生成到 `~/.packet-sniffer/certs/`：
+
+```bash
+cargo run -p desktop -- export-ca --out root-ca.pem   # 导出 root-ca.pem
+cargo run -p desktop -- install-ca                     # 安装到系统信任存储（需要管理员权限）
+cargo run -p desktop -- uninstall-ca                   # 移除
+```
+
+界面「⋯ 菜单 → 设置」的证书卡片也提供安装与导出按钮；检测到根证书已进入系统信任存储时，界面不再提示安装。
+
+### 4. 接管系统代理
+
+```bash
 cargo run -p desktop -- system-proxy enable
 cargo run -p desktop -- system-proxy disable
-
-# 只转发不解密
-cargo run -p desktop -- run --no-capture
-
-# 链式代理：系统 → 本引擎(8899) → 已有代理(如 MonoProxy / Clash 的 8118) → 外网
-cargo run -p desktop -- run --upstream-proxy 127.0.0.1:8118
-
-# 链式代理 + Basic 认证
-cargo run -p desktop -- run --upstream-proxy http://user:pass@10.0.0.2:3128
 ```
-验证（注意 `curl` 默认对 localhost 直连，需要 `--noproxy ""` 才会走代理）：
+
+界面「设置」中打开「接管系统代理」后，引擎启动时自动设置。
+
+### 5. 验证
+
+> `curl` 默认对 localhost 直连，测试本机代理必须加 `--noproxy ""`。
+
 ```bash
 curl -x http://127.0.0.1:8899 --noproxy "" http://127.0.0.1:18080/index.html
 curl -x http://127.0.0.1:8899 --cacert root-ca.pem https://example.com/
 ```
 
-> 图形界面通过 `crates/desktop-ui` 启动；命令行模式仍可用 `cargo run -p desktop -- run`，两者共用同一套状态机与事件桥。
-
-### 4. 持续集成与构建产物
-GitHub Actions 工作流 [`.github/workflows/build.yml`](.github/workflows/build.yml) 会在推送、Pull Request 和手动触发时：
-
-1. 在 Ubuntu 24.04 上执行 `cargo fmt --check`、`cargo clippy` 与 `cargo test --workspace`；
-2. 构建 Linux x86_64、Windows x86_64、macOS Apple Silicon 与 macOS Intel 四个平台的 release 二进制；
-3. 每个平台上传独立产物，包含 `packet-sniffer`（CLI）与 `packet-sniffer-ui`（NSH 图形界面）。
-
-构建产物可在仓库的 **Actions → Build → 对应运行 → Artifacts** 下载。本地生成同样的 release 二进制：
+运行完整自检（监听、状态页、明文抓包、MITM 解密、系统信任、链式代理）：
 
 ```bash
+cargo run -p desktop -- run --port 8899   # 另开一个终端
+scripts/verify.sh http://127.0.0.1:8899 127.0.0.1:8118
+```
+
+## 五、命令行参考
+
+```
+packet-sniffer run [选项]                启动代理（headless 模式输出到终端）
+packet-sniffer export-ca [--out <文件>]  导出根证书（默认 root-ca.pem）
+packet-sniffer install-ca                安装根证书到系统信任存储
+packet-sniffer uninstall-ca              从系统信任存储移除根证书
+packet-sniffer system-proxy enable|disable
+packet-sniffer --help
+```
+
+| 选项 | 默认值 | 说明 |
+|------|--------|------|
+| `--host <地址>` | `127.0.0.1` | 监听地址 |
+| `--port <端口>` | `8899` | 监听端口 |
+| `--ca-dir <目录>` | `~/.packet-sniffer/certs` | 根证书目录 |
+| `--settings <文件>` | `~/.packet-sniffer/settings.json` | 设置文件路径 |
+| `--no-capture` / `--capture` | `--capture` | 关闭 / 开启 HTTPS 解密 |
+| `--upstream-proxy <地址>` | 直连 | 链式代理，如 `http://127.0.0.1:8118` 或 `user:pass@10.0.0.2:3128` |
+| `--max-body <字节>` | `2097152`（2 MiB） | 单个 body 抓取上限 |
+| `--store-capacity <条>` | `2000` | 内存存储条数上限 |
+| `--json` | 关闭 | `run` 模式下额外输出完整记录的 JSON 行 |
+
+命令行参数会覆盖设置文件中的同名项，但不会写回设置文件。
+
+## 六、配置
+
+设置持久化为 JSON（`~/.packet-sniffer/settings.json`），结构级 `serde(default)`：文件损坏或新增字段缺失时回落到默认值，不阻断启动。
+
+```json
+{
+  "listen_addr": "127.0.0.1:8899",
+  "capture_enabled": true,
+  "max_body_bytes": 2097152,
+  "store_capacity": 2000,
+  "ca_dir": "/Users/<name>/.packet-sniffer/certs",
+  "system_proxy": false,
+  "theme": "system",
+  "upstream_proxy": { "host": "127.0.0.1", "port": 8118 },
+  "rules": []
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `listen_addr` | 代理监听地址，默认 `127.0.0.1:8899` |
+| `capture_enabled` | 是否解密 HTTPS；关闭后 CONNECT 仅透明转发 |
+| `max_body_bytes` | 单个请求 / 响应 body 的抓取上限，超出部分标记 `body_truncated`，转发不受影响 |
+| `store_capacity` | 内存中保留的最近请求条数，同时作为历史库裁剪上限 |
+| `ca_dir` | 根证书与私钥目录，文件为 `root-ca.pem` / `root-ca.key` |
+| `system_proxy` | 引擎启动后是否自动接管系统代理（默认关闭） |
+| `theme` | `system` / `light` / `dark` |
+| `upstream_proxy` | 链式代理 `{ host, port, username?, password? }`，`null` 表示直连 |
+| `rules` | 规则列表，见下节 |
+
+引擎层固定默认值（`EngineConfig`）：根证书 CN 为 `Packet Sniffer Local CA`，连接上游超时 10s，等待响应体读完最长 120s。
+
+### 运行时文件
+
+| 路径 | 内容 |
+|------|------|
+| `~/.packet-sniffer/settings.json` | 界面与引擎设置、规则 |
+| `~/.packet-sniffer/history.db` | SQLite 历史记录（WAL 模式）、高亮与备注 |
+| `~/.packet-sniffer/certs/root-ca.pem` | 根证书，供系统信任 |
+| `~/.packet-sniffer/certs/root-ca.key` | 根证书私钥，**不要提交或外传** |
+
+## 七、规则引擎
+
+规则按列表顺序匹配，条件为空表示不限制：
+
+| 匹配条件 | 说明 |
+|----------|------|
+| `method` | HTTP 方法，大小写不敏感 |
+| `url_contains` | URL 包含该子串（大小写不敏感） |
+| `host_suffix` | Host 以该后缀结尾（大小写不敏感） |
+
+| 动作 | 说明 |
+|------|------|
+| `block` | 直接返回指定状态码，不连接上游 |
+| `mock` | 直接返回指定状态码、`Content-Type` 与响应体 |
+| `add_request_header` | 请求发往上游前设置 / 覆盖首部 |
+| `add_response_header` | 响应返回客户端前设置 / 覆盖首部 |
+
+`block` 与 `mock` 会终止转发，取第一条命中的终止规则；首部规则会全部生效。在界面「规则引擎」页编辑并点击保存后会重启代理。
+
+## 八、图形界面
+
+- **工具栏**：启动 / 停止代理、筛选聚焦、清空、代理状态胶囊、切换排序、导出请求 JSON、⋯ 菜单（设置、规则引擎）。
+- **侧边栏**：收藏（固定请求、错误请求）、全部请求、工具（规则引擎）、按客户端（User-Agent）分组、按域名分组；底部筛选框支持 URL / 域名 / 方法。
+- **请求表格**：虚拟滚动；展示序号、URL、客户端、方法、状态、时间、耗时、请求 / 响应大小、HTTPS 与固定标记；支持全部 / HTTP / HTTPS / JSON / 错误类型筛选与按列排序。
+- **右键菜单**：复制 URL、复制为 cURL、复制请求 / 响应原文、固定、高亮颜色、导出筛选结果、删除单条（清空全部在工具栏）。
+- **检查器**：请求与响应并列。请求有概要、首部、查询参数、正文、原始 HTTP；响应有概要、首部、正文、原始、JSON 美化。JSON 正文用只读编辑器展示：自动格式化、语法高亮、行号与折叠；其余正文带行号，二进制以十六进制展示。顶部可选择高亮色并填写备注。
+- **规则页**：新增 / 编辑 / 删除规则，应用后自动重启引擎。
+- **设置页**：监听端口、上游代理、正文上限、HTTPS 解密、系统代理接管、外观、根证书状态 / 安装与导出、历史库路径 / 条数与清空。
+- **快捷键**：`⌘F` 聚焦筛选框，`⌘K` 清空请求，`⌘,` 打开设置。
+
+导出的请求列表写到 `~/Downloads/packet-sniffer-requests-<时间戳>.json`，包含当前筛选与排序结果。
+
+## 九、平台适配
+
+`system-bridge` 通过调用系统命令实现，不引入重型平台 SDK：
+
+| 平台 | 系统代理 | 根证书 |
+|------|----------|--------|
+| macOS | `networksetup`（遍历网络服务） | `security import` + `add-trusted-cert`（系统钥匙串，需要授权） |
+| Windows | `reg` 写入 `HKCU\...\Internet Settings`（WinINET） | `certutil -addstore -user Root` / `-delstore` |
+| Linux | GNOME `gsettings`（`org.gnome.system.proxy`） | NSS 数据库 `certutil`（Firefox / Chromium 等） |
+
+其他平台走 `unsupported` 实现并返回明确错误。
+
+## 十、开发与校验
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked
+cargo test --workspace --locked
 cargo build --release --workspace
 ```
 
-### 5. 已知限制
-- 仅解析 HTTP/1.1；HTTP/2、WebSocket、gRPC 留待后续迭代（ALPN 已固定为 `http/1.1`）。
-- 单条 body 默认最多抓取 2 MiB（`--max-body` 可调），超出部分只标记 `body_truncated`，转发不受影响。
-- 响应记录在客户端把 body 消费完（或超时）后入库，因此列表里会先出现「进行中」条目。
-- 根证书需手动信任；未实现「一键安装 + 系统授权」的完整流程（`install-ca` 已封装平台命令）。
-- 规则引擎已支持阻断、模拟响应、请求 / 响应首部增改；断点、请求改写与重发仍未实现。
-- 历史记录、高亮与备注已持久化到 SQLite；多选、按规则自动高亮暂未实现。
+当前状态：`cargo test --workspace` 全部通过（共 104 个单元 / 集成测试，含 `proxy-engine/tests/proxy_e2e.rs`）；`cargo clippy` 仅剩 `ProxyContext::log` 未被使用的提示。
 
-### 6. 图形界面
-`crates/desktop-ui` 是 NSH 原生界面，布局参考 Proxyman：
+## 十一、CI 与构建产物
 
-- **工具栏**：启动 / 停止代理、筛选、清空、代理状态胶囊、排序、导出根证书、设置。
-- **侧边栏**：收藏（固定请求、错误请求）、全部请求、按客户端（User-Agent）分组、按域名分组；底部筛选框支持 URL / 域名 / 方法。
-- **请求表格**：虚拟滚动，展示序号、URL、客户端、方法、状态、时间、耗时、请求 / 响应大小、HTTPS 与固定标记；HTTP / HTTPS / JSON / 错误类型标签和方法筛选；点击列头可按 URL、客户端、方法、状态、时间、耗时、大小排序。
-- **右键菜单**：复制 URL、复制为 cURL、复制请求 / 响应原文、固定、高亮颜色、导出筛选结果、删除单条或清空全部。
-- **检查器**：请求与响应并列，支持概要、首部、查询参数、正文、原始 HTTP；顶部可直接选择高亮色并填写备注；响应额外提供 JSON 美化；正文带行号，二进制以十六进制展示。
-- **规则引擎**：侧边栏「规则引擎」页新增 / 编辑 / 删除规则，可按方法、URL、域名匹配，执行阻断、模拟响应、增改请求 / 响应首部；应用后自动重启引擎。
-- **持久化**：请求完成后写入 SQLite，重启恢复历史记录、高亮与备注；设置页可查看数据库路径、记录数与清空历史。
-- **设置页**：监听端口、上游代理、正文上限、HTTPS 解密、系统代理接管、跟随系统 / 浅色 / 深色外观、根证书安装与导出。
-- **导出**：工具栏的导出按钮把当前筛选 / 排序结果写成 `~/Downloads/packet-sniffer-requests-<时间>.json`，界面顶部给出结果提示。
-- **快捷键**：`⌘F` 聚焦筛选框，`⌘K` 清空请求。
+[`.github/workflows/build.yml`](.github/workflows/build.yml) 在推送 `master` / `main`、`v*` 标签、Pull Request 与手动触发时运行：
 
-### 7. 链式代理与企业内网
-**默认直连**（`upstream_proxy = None`）。需要时再显式开启链式代理：上游还有一层代理
-（企业代理、MonoProxy / Clash 这类本地代理客户端）时，用 `--upstream-proxy` 让引擎先经它建隧道：
+1. **test**（Ubuntu 24.04）：安装 GTK4 依赖，执行 `cargo fmt --check`、`cargo clippy --workspace --all-targets --locked`、`cargo test --workspace --locked`。
+2. **package**（矩阵）：`linux-x86_64`、`linux-aarch64`、`windows-x86_64`、`macos-universal`，编译后用 `nfpm`、`appimagetool`、`hdiutil`/`pkgbuild`、`NSIS`、`WiX` 生成各平台安装包。
+3. **release**（仅 `v*` 标签）：汇总全部产物，生成 `SHA256SUMS.txt` 与包管理器清单，发布到 GitHub Release。
+
+### 产物格式
+
+| 平台 | 格式 | 文件名 | 一键安装 |
+| --- | --- | --- | --- |
+| Debian / Ubuntu | `.deb` | `packet-sniffer_<版本>-<修订>_<amd64,arm64>.deb` | `sudo apt install ./packet-sniffer_*.deb` |
+| Fedora / RHEL / openSUSE | `.rpm` | `packet-sniffer-<版本>-<修订>.<x86_64,aarch64>.rpm` | `sudo dnf install ./packet-sniffer-*.rpm` |
+| Arch / Manjaro | pacman | `packet-sniffer-<版本>-<修订>-<x86_64,aarch64>.pkg.tar.zst` | `sudo pacman -U packet-sniffer-*.pkg.tar.zst` |
+| 任意 Linux | AppImage | `PacketSniffer-<版本>-linux-<x86_64,aarch64>.AppImage` | `chmod +x` 后双击或直接运行，免 root |
+| macOS | `.dmg` | `PacketSniffer-<版本>-macos-universal.dmg` | 打开镜像，把 `Packet Sniffer.app` 拖进 `Applications` |
+| macOS | `.pkg` | `PacketSniffer-<版本>-macos-universal.pkg` | 双击安装；附带 `/usr/local/bin/packet-sniffer` |
+| Windows | `.exe`（NSIS） | `PacketSniffer-<版本>-x64-setup.exe` | 双击安装，自动建开始菜单与桌面快捷方式 |
+| Windows | `.msi`（WiX） | `PacketSniffer-<版本>-x64.msi` | 双击，或 `msiexec /i x.msi /qn` 静默部署 |
+| Windows | Chocolatey | `packet-sniffer.<版本>.nupkg` | `choco install packet-sniffer -s .` |
+| Windows | winget 清单 | `packet-sniffer-<版本>-manifests.zip` 内 `winget/*.yaml` | `winget install --manifest <目录>` |
+| Windows | Scoop 清单 | 同上 `scoop/packet-sniffer.json` | `scoop install ./packet-sniffer.json` |
+| 任意 | 绿色版 | `packet-sniffer-<版本>-<平台>.tar.gz` / `.zip` | 解压即用 |
+
+- `.deb` / `.rpm` / pacman 包安装后提供 `/usr/bin/packet-sniffer`（CLI）与 `/usr/bin/packet-sniffer-ui`（图形界面），并注册应用菜单条目与图标；运行期依赖 GTK4（`libgtk-4-1` / `gtk4`）。
+- macOS 用 `lipo` 把 arm64 与 x86_64 合并成通用二进制，一个包覆盖 Intel 与 Apple Silicon。
+- AppImage 不打包 GTK4，运行时需要宿主已安装 GTK4；另外 AppImage 运行时依赖 FUSE2（Ubuntu 24.04 可 `sudo apt install libfuse2t64`），或设置 `APPIMAGE_EXTRACT_AND_RUN=1` 直接解包运行。
+- 非标签构建的版本号形如 `0.1.0+g<提交号>`，便于区分同一版本的多次构建；`SHA256SUMS.txt` 用于校验下载。
+- macOS 产物只有 ad-hoc 签名，未做 Developer ID 签名与公证；首次从网上下载后若提示「无法验证开发者」，可右键「打开」，或执行 `xattr -dr com.apple.quarantine "/Applications/Packet Sniffer.app"`。
+- Windows 的 `.exe` / `.msi` 未做 Authenticode 签名，SmartScreen 会提示未知发布者。
+- WiX 固定在 5.x（v6 起需接受 OSMF 许可）；企业环境可用 MSI 做静默部署（`msiexec /i x.msi /qn`）。
+
+安装完成后：
 
 ```bash
-cargo run -p desktop -- run --upstream-proxy 127.0.0.1:8118
+packet-sniffer run                    # 启动 headless 代理
+packet-sniffer install-ca             # 安装根证书（需要管理员权限）
+"/Applications/Packet Sniffer.app/Contents/MacOS/packet-sniffer" install-ca   # macOS 未用 pkg 装 CLI 时
 ```
 
-引擎会用 `CONNECT host:port` 在上游代理上打通隧道，再在隧道里做 TLS；
-配置项对应 `EngineConfig::with_upstream_proxy(Some(UpstreamProxy))`，支持 `http://user:pass@host:port` 形式的内嵌认证。
+### 本地打包
 
-**上游证书是自签的**（企业 MITM）时，用 `EngineConfig::with_upstream_extra_root(Some(pem_path))`
-把企业根证书加入上游信任库，无需关闭证书校验。
+打包配置与脚本都在 [`packaging/`](packaging) 下；Linux / Windows 打包前需先把两个二进制放进 `dist/staging/`。
 
-> 注意：如果本机已有代理客户端（如 MonoProxy）在持续改写系统代理，需要先在它的设置里关掉
-> 「设为系统代理」开关（保持它监听 8118 即可），再把系统代理指向本引擎的 8899，才能抓全系统流量。
+```bash
+# Linux deb / rpm / pacman（需要 nfpm：https://nfpm.goreleaser.com）
+NFPM_ARCH=amd64 NFPM_VERSION=0.1.0 NFPM_RELEASE=1 \
+  nfpm package --config packaging/linux/nfpm.yaml --packager deb \
+  --target dist/packet-sniffer_0.1.0-1_amd64.deb
+
+# Linux AppImage（需联网下载 appimagetool，或用 APPIMAGETOOL 指定本地工具）
+packaging/linux/make-appimage.sh dist/staging 0.1.0 x86_64 dist
+
+# macOS dmg + pkg（系统自带 hdiutil / pkgbuild / codesign）
+packaging/macos/make-packages.sh target/release 0.1.0 universal dist
+
+# Windows NSIS（makensis 的相对路径以脚本目录为基准，故传绝对路径）
+makensis -DAPP_VERSION=0.1.0 -DOUTFILE=<绝对路径>\PacketSniffer-setup.exe \
+  -DSTAGE_DIR=<仓库根>/dist/staging -DDOCS_DIR=<仓库根> packaging/windows/installer.nsi
+
+# Windows MSI（WiX 5：dotnet tool install --global wix --version 5.*）
+wix build -arch x64 -d SourceDir=<仓库根>/dist/staging -d ProductVersion=0.1.0 \
+  -o dist/PacketSniffer.msi packaging/windows/product.wxs
+
+# winget / Scoop / Chocolatey 清单（需要 Chocolatey）
+pwsh packaging/windows/make-manifests.ps1 -Version 1.2.3 -DistDir dist
+```
+
+## 十二、已知限制
+
+- 仅解析 HTTP/1.1；HTTP/2、WebSocket、gRPC 尚未支持（MITM 的 ALPN 固定为 `http/1.1`）。
+- 响应记录在客户端消费完 body（或达到 120s 空闲超时）后入库，因此列表会先出现「进行中」条目。
+- 根证书需系统信任；`install-ca` 封装了平台命令，但系统授权对话框仍需用户确认。
+- 规则引擎支持阻断、模拟响应与首部改写；断点、请求改写与重发未实现。
+- 历史记录、高亮与备注已持久化；多选与「按规则自动高亮」未实现。
+- Linux 的系统代理仅覆盖 GNOME `gsettings`，根证书通过 NSS 数据库安装。
+- `ui-legacy/` 为早期 TSX 原型，不参与构建，也不随产物分发。
+- 未提供 Alpine `apk`（需 musl 构建环境）与 Flatpak / Snap（沙箱会限制系统代理接管与根证书安装）。
+
+## 十三、安全提示
+
+- 抓包数据包含完整请求 / 响应内容与凭据，`history.db` 与导出的 JSON 请按敏感数据保管。
+- `root-ca.key` 是签发任意站点证书的能力来源，切勿提交到版本库或分发给他人；`.gitignore` 已忽略 `certs/`。
+- 默认只监听 `127.0.0.1`。若改为对外监听，代理端口无认证，请自行加访问控制。
+- 只抓取自己有权调试的流量。
+
+## 十四、许可证
+
+[MIT](LICENSE)

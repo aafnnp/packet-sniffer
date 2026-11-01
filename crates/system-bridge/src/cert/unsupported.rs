@@ -4,6 +4,10 @@ use std::path::Path;
 
 use crate::{Result, SystemBridgeError};
 
+pub fn is_installed(_common_name: &str) -> bool {
+    false
+}
+
 pub fn install(_cert_path: &Path, _common_name: &str) -> Result<()> {
     Err(SystemBridgeError::Unsupported(format!(
         "{} 暂不支持自动安装根证书",

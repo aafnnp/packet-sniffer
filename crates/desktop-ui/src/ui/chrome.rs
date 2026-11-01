@@ -13,6 +13,7 @@ use crate::model::{Facet, KindFilter, Section, View};
 use crate::theme::{colors, radius, size};
 use crate::ui::icons::{IconName, icon, icon_reactive};
 use crate::ui::widgets::{Ctx, icon_button, section_title};
+use nsh_base::{menu, menu_item};
 
 pub fn toolbar(ctx: Ctx) -> impl IntoElement {
     let ctx_icon = ctx;
@@ -22,7 +23,6 @@ pub fn toolbar(ctx: Ctx) -> impl IntoElement {
     let ctx_trash = ctx;
     let ctx_sort = ctx;
     let ctx_export = ctx;
-    let ctx_gear = ctx;
     view()
         .h(px(size::TOOLBAR_HEIGHT))
         .w_full()
@@ -96,12 +96,62 @@ pub fn toolbar(ctx: Ctx) -> impl IntoElement {
             colors::MUTED,
             move || ctx_export.act(|m| m.export_requests()),
         ))
-        .child(icon_button(
-            IconName::Gear,
-            "设置",
-            colors::MUTED,
-            move || ctx_gear.act(|m| m.set_view(View::Settings)),
-        ))
+        .child(app_menu(ctx))
+}
+
+/// 右上角的「更多」菜单：设置与规则引擎等整页入口都收在这里。
+fn app_menu(ctx: Ctx) -> impl IntoElement {
+    let settings = { move || ctx.act(|m| m.set_view(View::Settings)) };
+    let rules = { move || ctx.act(|m| m.set_view(View::Rules)) };
+    let shortcut = if cfg!(target_os = "macos") {
+        "⌘,"
+    } else {
+        "Ctrl+,"
+    };
+    menu()
+        .trigger(
+            view()
+                .size(px(28.0))
+                .items_center()
+                .justify_center()
+                .rounded(px(radius::CONTROL))
+                .cursor_pointer()
+                .role(AccessibilityRole::Button)
+                .label("更多")
+                .hover(|s| s.bg(colors::RAISED))
+                .active(|s| s.opacity(0.55))
+                .child(icon(IconName::More, 16.0, colors::MUTED)),
+        )
+        .popup_class("min-w-[180px] rounded-md border border-border bg-popover p-1 shadow-lg")
+        .child(menu_choice("设置", Some(shortcut), settings))
+        .child(menu_choice("规则引擎", None, rules))
+}
+
+fn menu_choice(
+    label: &'static str,
+    shortcut: Option<&'static str>,
+    on_select: impl Fn() + 'static,
+) -> impl IntoElement {
+    let mut item = menu_item()
+        .flex_row()
+        .items_center()
+        .gap(px(18.0))
+        .px(px(8.0))
+        .py(px(5.0))
+        .rounded(px(4.0))
+        .hover(|s| s.bg(colors::RAISED))
+        .active(|s| s.opacity(0.6))
+        .on_select(on_select)
+        .child(
+            text(label)
+                .flex_1()
+                .text_size(px(12.0))
+                .text_color(colors::TEXT),
+        );
+    if let Some(shortcut) = shortcut {
+        item = item.child(text(shortcut).text_size(px(11.0)).text_color(colors::FAINT));
+    }
+    item
 }
 
 fn status_pill(ctx: Ctx) -> impl IntoElement {

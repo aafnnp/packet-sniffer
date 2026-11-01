@@ -36,6 +36,7 @@ pub enum IconName {
     Shield,
     Clock,
     Rule,
+    More,
 }
 
 fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds<nsh_core::Points> {
@@ -175,6 +176,11 @@ fn draw(name: IconName, c: Painter) -> Painter {
         IconName::Rule => {
             let c = line(c, &[3.0, 6.0, 8.0, 6.0, 8.0, 14.0, 17.0, 14.0]);
             line(c, &[3.0, 14.0, 5.0, 14.0])
+        }
+        IconName::More => {
+            let c = circle(c, 4.5, 10.0, 1.3, true);
+            let c = circle(c, 10.0, 10.0, 1.3, true);
+            circle(c, 15.5, 10.0, 1.3, true)
         }
     }
 }

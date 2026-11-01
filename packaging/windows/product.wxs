@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Packet Sniffer 的 MSI 安装包（WiX v5+）。只用于企业 / 静默部署场景，
+     交互式安装仍推荐 NSIS 的 -setup.exe。
+
+     构建（在 Windows runner 上）：
+       wix build -arch x64 \
+         -d SourceDir=<绝对路径>/dist/staging \
+         -d ProductVersion=1.2.3 \
+         -o out/PacketSniffer-1.2.3-x64.msi packaging/windows/product.wxs
+
+     ProductVersion 必须是纯数字版本号（x.y.z），不能带 +g<sha> 之类的构建元数据。 -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Packet Sniffer"
+           Manufacturer="aafnnp"
+           Version="$(var.ProductVersion)"
+           UpgradeCode="6f3f0b63-8adc-4c1e-9c62-2b7f8bd9a1c4"
+           Scope="perMachine"
+           Language="1033"
+           Codepage="1252">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Packet Sniffer is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Packet Sniffer">
+        <Component Id="MainExecutables" Guid="0d7c1f21-4a53-4a2b-9c43-5b1d7f0c8a11">
+          <File Id="GuiExe" Source="$(var.SourceDir)/packet-sniffer-ui.exe" KeyPath="yes" />
+          <File Id="CliExe" Source="$(var.SourceDir)/packet-sniffer.exe" />
+        </Component>
+        <Component Id="Documents" Guid="b3c2f8a4-6d1e-4b7a-8e15-2f9c0d5a7e22">
+          <File Id="ReadmeMd" Source="$(var.SourceDir)/README.md" KeyPath="yes" />
+          <File Id="LicenseFile" Source="$(var.SourceDir)/LICENSE" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AppMenuFolder" Name="Packet Sniffer" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder" />
+
+    <Component Id="ApplicationShortcuts" Guid="c71a4e08-2b6f-4c39-b0d7-83e5a1f6d933" Directory="AppMenuFolder">
+      <Shortcut Id="StartMenuShortcut"
+                Name="Packet Sniffer"
+                Target="[INSTALLFOLDER]packet-sniffer-ui.exe"
+                WorkingDirectory="INSTALLFOLDER" />
+      <Shortcut Id="DesktopShortcut"
+                Directory="DesktopFolder"
+                Name="Packet Sniffer"
+                Target="[INSTALLFOLDER]packet-sniffer-ui.exe"
+                WorkingDirectory="INSTALLFOLDER" />
+      <RemoveFolder Id="RemoveAppMenuFolder" Directory="AppMenuFolder" On="uninstall" />
+      <RegistryValue Root="HKCU"
+                     Key="Software\aafnnp\PacketSniffer"
+                     Name="Shortcuts"
+                     Type="integer"
+                     Value="1"
+                     KeyPath="yes" />
+    </Component>
+
+    <Feature Id="MainFeature" Title="Packet Sniffer" Level="1">
+      <ComponentRef Id="MainExecutables" />
+      <ComponentRef Id="Documents" />
+      <ComponentRef Id="ApplicationShortcuts" />
+    </Feature>
+  </Package>
+</Wix>

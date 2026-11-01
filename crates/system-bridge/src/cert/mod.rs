@@ -10,16 +10,16 @@ mod unsupported;
 mod windows;
 
 #[cfg(target_os = "macos")]
-pub use macos::{install, uninstall};
+pub use macos::{install, is_installed, uninstall};
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-pub use unsupported::{install, uninstall};
+pub use unsupported::{install, is_installed, uninstall};
 #[cfg(target_os = "windows")]
-pub use windows::{install, uninstall};
+pub use windows::{install, is_installed, uninstall};
 
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-pub use linux::{install, uninstall};
+pub use linux::{install, is_installed, uninstall};
 
 /// 手动安装根证书的提示文本（自动安装失败时展示给用户）。
 pub fn install_hint(cert_path: &Path) -> String {

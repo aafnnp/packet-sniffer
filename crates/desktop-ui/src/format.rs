@@ -103,18 +103,27 @@ fn pretty_json(bytes: &[u8]) -> Option<String> {
     serde_json::to_string_pretty(&value).ok()
 }
 
+fn looks_like_json(bytes: &[u8]) -> bool {
+    bytes
+        .iter()
+        .find(|byte| !byte.is_ascii_whitespace())
+        .is_some_and(|byte| *byte == b'{' || *byte == b'[')
+}
+
+/// body 解析成功时的 JSON 美化文本；不是 JSON 时返回 `None`。
+pub fn json_preview(bytes: &[u8], content_type: Option<&str>) -> Option<String> {
+    if !is_json(content_type) && !looks_like_json(bytes) {
+        return None;
+    }
+    pretty_json(bytes)
+}
+
 /// body 的可读预览：JSON 美化、文本原样、二进制十六进制。
 pub fn body_preview(bytes: &[u8], content_type: Option<&str>) -> String {
     if bytes.is_empty() {
         return "（空）".to_string();
     }
-    let looks_json = bytes
-        .iter()
-        .find(|byte| !byte.is_ascii_whitespace())
-        .is_some_and(|byte| *byte == b'{' || *byte == b'[');
-    if (is_json(content_type) || looks_json)
-        && let Some(pretty) = pretty_json(bytes)
-    {
+    if let Some(pretty) = json_preview(bytes, content_type) {
         return pretty;
     }
     if is_textual(content_type) || std::str::from_utf8(bytes).is_ok() {
@@ -329,6 +338,16 @@ mod tests {
         let body = br#"{"hello":"world","items":[1,2]}"#;
         let text = body_preview(body, Some("application/json; charset=utf-8"));
         assert!(text.contains("\n  \"hello\": \"world\""));
+    }
+
+    #[test]
+    fn json_preview_only_accepts_json() {
+        assert!(json_preview(b"plain", Some("text/plain")).is_none());
+        assert!(json_preview(b"{\"a\":1}", Some("text/plain")).is_some());
+        assert_eq!(
+            json_preview(br#"{"a":[1,2]}"#, None).unwrap(),
+            "{\n  \"a\": [\n    1,\n    2\n  ]\n}"
+        );
     }
 
     #[test]

@@ -175,6 +175,10 @@ pub struct Detail {
     pub query: Vec<(String, String)>,
     pub request_body: String,
     pub response_body: String,
+    /// 请求 body 解析为 JSON 后的美化文本（不是 JSON 时为 `None`）。
+    pub request_json: Option<String>,
+    /// 响应 body 解析为 JSON 后的美化文本（不是 JSON 时为 `None`）。
+    pub response_json: Option<String>,
     pub request_raw: String,
     pub response_raw: String,
     pub response_content_type: Option<String>,
@@ -193,6 +197,8 @@ pub struct Status {
     pub error: Option<String>,
     pub captured: usize,
     pub system_proxy: bool,
+    /// 根证书是否已安装到系统信任存储。
+    pub ca_installed: bool,
 }
 
 impl Status {
@@ -233,6 +239,7 @@ pub struct Model {
     pub store: Option<HistoryStore>,
     clients_by_id: HashMap<RequestId, String>,
     detail_dirty: bool,
+    ca_installed: bool,
     rx: Option<Receiver<EngineEvent>>,
     engine: Option<Arc<ProxyEngine>>,
     runtime: Option<tokio::runtime::Runtime>,
@@ -336,6 +343,7 @@ impl Model {
             store,
             clients_by_id: HashMap::new(),
             detail_dirty: false,
+            ca_installed: false,
             rx: None,
             engine: None,
             runtime: None,
@@ -350,6 +358,7 @@ impl Model {
             }
         }
         model.refresh();
+        model.refresh_ca_installed();
         model
     }
 
@@ -446,6 +455,7 @@ impl Model {
             error: self.app.last_error.clone(),
             captured: self.app.requests.len(),
             system_proxy: self.settings.system_proxy,
+            ca_installed: self.ca_installed,
         };
         if self.engine.is_some() && !status.running && !status.failed {
             status.label = "启动中".to_string();
@@ -542,6 +552,16 @@ impl Model {
             format::content_type(&exchange.request.headers).map(str::to_string);
         let mut request_body =
             format::body_preview(&exchange.request.body, request_content_type.as_deref());
+        let request_json =
+            format::json_preview(&exchange.request.body, request_content_type.as_deref()).map(
+                |text| {
+                    body_note(
+                        text,
+                        exchange.request.body_truncated,
+                        exchange.request.body_complete,
+                    )
+                },
+            );
         if exchange.request.body_truncated {
             request_body.push_str("\n\n… 已按抓取上限截断");
         } else if !exchange.request.body_complete {
@@ -556,6 +576,10 @@ impl Model {
             || "（等待响应）".to_string(),
             |response| format::body_preview(&response.body, response_content_type.as_deref()),
         );
+        let response_json = exchange.response.as_ref().and_then(|response| {
+            format::json_preview(&response.body, response_content_type.as_deref())
+                .map(|text| body_note(text, response.body_truncated, response.body_complete))
+        });
         if let Some(response) = &exchange.response {
             if response.body_truncated {
                 response_body.push_str("\n\n… 已按抓取上限截断");
@@ -584,6 +608,8 @@ impl Model {
             query: format::query_pairs(&exchange.request.url),
             request_body,
             response_body,
+            request_json,
+            response_json,
             request_raw: format::raw_request(&exchange.request),
             response_raw: exchange
                 .response
@@ -842,6 +868,7 @@ impl Model {
         self.settings_message = None;
         if view == View::Settings {
             self.draft = SettingsDraft::from_settings(&self.settings);
+            self.refresh_ca_installed();
         }
     }
 
@@ -1004,6 +1031,7 @@ impl Model {
         }
         self.engine = Some(engine);
         self.runtime = Some(runtime);
+        self.refresh_ca_installed();
     }
 
     pub fn stop_engine(&mut self) {
@@ -1071,11 +1099,7 @@ impl Model {
     }
 
     pub fn install_ca(&mut self) {
-        let path = self
-            .app
-            .ca_cert_path
-            .clone()
-            .unwrap_or_else(|| self.settings.engine_config().ca_cert_path());
+        let path = self.ca_path();
         if !path.exists() {
             self.settings_message = Some((
                 false,
@@ -1094,14 +1118,27 @@ impl Model {
                 ),
             ),
         });
+        self.refresh_ca_installed();
+    }
+
+    /// 根证书文件路径：引擎已启动时用引擎报告的路径，否则用配置里的路径。
+    fn ca_path(&self) -> PathBuf {
+        self.app
+            .ca_cert_path
+            .clone()
+            .unwrap_or_else(|| self.settings.engine_config().ca_cert_path())
+    }
+
+    /// 重新查询系统信任存储，避免根证书已安装时仍然提示安装。
+    fn refresh_ca_installed(&mut self) {
+        let common_name = self.settings.engine_config().ca_common_name;
+        self.ca_installed =
+            self.ca_path().exists() && system_bridge::cert::is_installed(&common_name);
+        self.status.ca_installed = self.ca_installed;
     }
 
     pub fn export_ca(&mut self) {
-        let source = self
-            .app
-            .ca_cert_path
-            .clone()
-            .unwrap_or_else(|| self.settings.engine_config().ca_cert_path());
+        let source = self.ca_path();
         if !source.exists() {
             self.settings_message = Some((
                 false,
@@ -1256,6 +1293,16 @@ fn facet_list(counts: HashMap<String, usize>, icon: IconName) -> Vec<Facet> {
 fn system_proxy_apply(host: String, port: u16) -> Result<(), String> {
     let settings = system_bridge::proxy::ProxySettings::new(host, port);
     system_bridge::proxy::apply(&settings).map_err(|error| error.to_string())
+}
+
+/// 在 body 文本后补充抓取状态说明。
+fn body_note(mut text: String, truncated: bool, complete: bool) -> String {
+    if truncated {
+        text.push_str("\n\n… 已按抓取上限截断");
+    } else if !complete {
+        text.push_str("\n\n… body 尚未读完");
+    }
+    text
 }
 
 #[cfg(test)]
