@@ -352,6 +352,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      # 生成变更清单需要完整历史与标签，默认的浅克隆拿不到。
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -365,6 +370,13 @@ jobs:
           sha256sum -- * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
+      - name: Generate release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/release-notes.sh "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
       - name: Publish release assets
         shell: bash
         env:
@@ -372,9 +384,11 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          notes="$RUNNER_TEMP/notes.md"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$notes"
             gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
           else
             gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" \
-              --title "$TAG" --generate-notes
+              --title "$TAG" --notes-file "$notes"
           fi

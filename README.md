@@ -329,6 +329,16 @@ packet-sniffer install-ca             # 安装根证书（需要管理员权限�
 "/Applications/Packet Sniffer.app/Contents/MacOS/packet-sniffer" install-ca   # macOS 未用 pkg 装 CLI 时
 ```
 
+### 发布说明
+
+`v*` 标签触发的 `release` job 会用 [`scripts/release-notes.sh`](scripts/release-notes.sh) 生成 Release 正文：安装方式表格 + 按类型分组的变更清单 + 与上一个标签的 compare 链接（首次发布则链接到全部提交）。
+
+变更清单按 [Conventional Commits](https://www.conventionalcommits.org/) 前缀归类（`feat` / `fix` / `perf` / `refactor` / `docs` / `test` / `build`、`ci`、`chore`、`style`，其余落入「其他」），所以提交信息请保持 `type(scope): 描述` 的形式。本地预览：
+
+```bash
+scripts/release-notes.sh v0.1.0
+```
+
 ### 本地打包
 
 打包配置与脚本都在 [`packaging/`](packaging) 下；Linux / Windows 打包前需先把两个二进制放进 `dist/staging/`。
