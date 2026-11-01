@@ -1,12 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Chocolatey CLI 不认 NuGet 的 <license type="expression">，只接受 <licenseUrl>。 -->
 <package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
   <metadata>
     <id>packet-sniffer</id>
     <version>__VERSION__</version>
     <title>Packet Sniffer</title>
     <authors>__PUBLISHER__</authors>
+    <owners>__PUBLISHER__</owners>
     <projectUrl>__HOMEPAGE__</projectUrl>
-    <license type="expression">MIT</license>
+    <projectSourceUrl>__HOMEPAGE__</projectSourceUrl>
+    <packageSourceUrl>__HOMEPAGE__/tree/master/packaging/windows/manifests/chocolatey</packageSourceUrl>
+    <docsUrl>__HOMEPAGE__#readme</docsUrl>
+    <bugTrackerUrl>__HOMEPAGE__/issues</bugTrackerUrl>
+    <licenseUrl>__LICENSE_URL__</licenseUrl>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
     <summary>基于 NSH 原生 UI 的 HTTP/HTTPS 抓包代理工作台</summary>
     <description>支持明文 HTTP 抓包、CONNECT 隧道与基础 MITM 解密，可接管系统代理并安装根证书。</description>

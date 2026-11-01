@@ -27,6 +27,7 @@ $values = @{
     '__VERSION__'         = $Version
     '__PUBLISHER__'       = 'aafnnp'
     '__HOMEPAGE__'        = "https://github.com/$Repository"
+    '__LICENSE_URL__'     = "https://github.com/$Repository/blob/master/LICENSE"
     '__INSTALLER_URL__'   = "$baseUrl/$($setup.Name)"
     '__INSTALLER_SHA256__' = $installerSha
     '__PORTABLE_URL__'    = "$baseUrl/$($portable.Name)"
@@ -58,4 +59,8 @@ choco pack $nuspec --output-directory $DistDir
 if ($LASTEXITCODE -ne 0) { throw "choco pack 失败：$LASTEXITCODE" }
 
 Write-Host "已生成清单：$archive"
+Get-ChildItem -Path $stage -Recurse -File | ForEach-Object {
+    Write-Host "--- $($_.FullName.Substring($stage.Length + 1)) ---"
+    Get-Content -LiteralPath $_.FullName | Write-Host
+}
 Get-ChildItem -Path $DistDir -Filter '*nupkg' | Format-Table Name, Length
