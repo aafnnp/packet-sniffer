@@ -6,7 +6,7 @@ use tracing::info;
 
 use crate::{run, Result};
 
-pub fn install(cert_path: &Path) -> Result<()> {
+pub fn install(cert_path: &Path, _common_name: &str) -> Result<()> {
     let path = cert_path.display().to_string();
     run("certutil", &["-addstore", "-user", "Root", &path])?;
     info!("根证书已加入当前用户「受信任的根证书颁发机构」");
