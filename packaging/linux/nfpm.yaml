@@ -36,6 +36,10 @@ contents:
     dst: /usr/share/icons/hicolor/scalable/apps/packet-sniffer.svg
     file_info:
       mode: 0644
+  - src: packaging/linux/packet-sniffer.png
+    dst: /usr/share/icons/hicolor/256x256/apps/packet-sniffer.png
+    file_info:
+      mode: 0644
   - src: README.md
     dst: /usr/share/doc/packet-sniffer/README.md
   - src: LICENSE

@@ -6,10 +6,11 @@
 ;     -DOUTFILE=<绝对路径>/PacketSniffer-setup.exe \
 ;     -DSTAGE_DIR=<仓库根>/dist/staging \
 ;     -DDOCS_DIR=<仓库根> \
+;     [-DSEP=/] \
 ;     packaging/windows/installer.nsi
 ;
 ; dist/staging/ 内需先放好 packet-sniffer.exe 与 packet-sniffer-ui.exe。
-; 路径请用正斜杠，POSIX 与 Windows 版 makensis 都能识别。
+; Windows 下路径用反斜杠（FindFirstFile 不认正斜杠）；在 macOS/Linux 上验证时加 -DSEP=/。
 
 !ifndef APP_VERSION
   !define APP_VERSION "0.0.0"
@@ -25,6 +26,11 @@
 
 !ifndef DOCS_DIR
   !error "缺少 DOCS_DIR：请用 -DDOCS_DIR=<绝对路径> 指向 README.md 与 LICENSE 所在目录"
+!endif
+
+; Windows 的 FindFirstFile 不认正斜杠，所以默认用 \；POSIX 版 makensis 本地验证时传 -DSEP=/
+!ifndef SEP
+  !define SEP "\"
 !endif
 
 !define APP_NAME "Packet Sniffer"
@@ -60,10 +66,10 @@ SetCompressor /SOLID lzma
 
 Section "Install"
   SetOutPath "$INSTDIR"
-  File "${STAGE_DIR}/packet-sniffer.exe"
-  File "${STAGE_DIR}/packet-sniffer-ui.exe"
-  File "${DOCS_DIR}/README.md"
-  File "${DOCS_DIR}/LICENSE"
+  File "${STAGE_DIR}${SEP}packet-sniffer.exe"
+  File "${STAGE_DIR}${SEP}packet-sniffer-ui.exe"
+  File "${DOCS_DIR}${SEP}README.md"
+  File "${DOCS_DIR}${SEP}LICENSE"
 
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
   CreateShortCut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"

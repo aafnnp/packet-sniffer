@@ -4,10 +4,12 @@
 
      构建（在 Windows runner 上）：
        wix build -arch x64 \
-         -d SourceDir=<绝对路径>/dist/staging \
+         -d SourceDir=<绝对路径>/dist/staging/ \
          -d ProductVersion=1.2.3 \
          -o out/PacketSniffer-1.2.3-x64.msi packaging/windows/product.wxs
 
+     SourceDir 必须以路径分隔符结尾（Windows 传 ...\\dist\\staging\\），这样模板里
+     就不需要写分隔符，两个平台都能正确解析。
      ProductVersion 必须是纯数字版本号（x.y.z），不能带 +g<sha> 之类的构建元数据。 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package Name="Packet Sniffer"
@@ -24,12 +26,12 @@
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Packet Sniffer">
         <Component Id="MainExecutables" Guid="0d7c1f21-4a53-4a2b-9c43-5b1d7f0c8a11">
-          <File Id="GuiExe" Source="$(var.SourceDir)/packet-sniffer-ui.exe" KeyPath="yes" />
-          <File Id="CliExe" Source="$(var.SourceDir)/packet-sniffer.exe" />
+          <File Id="GuiExe" Source="$(var.SourceDir)packet-sniffer-ui.exe" KeyPath="yes" />
+          <File Id="CliExe" Source="$(var.SourceDir)packet-sniffer.exe" />
         </Component>
         <Component Id="Documents" Guid="b3c2f8a4-6d1e-4b7a-8e15-2f9c0d5a7e22">
-          <File Id="ReadmeMd" Source="$(var.SourceDir)/README.md" KeyPath="yes" />
-          <File Id="LicenseFile" Source="$(var.SourceDir)/LICENSE" />
+          <File Id="ReadmeMd" Source="$(var.SourceDir)README.md" KeyPath="yes" />
+          <File Id="LicenseFile" Source="$(var.SourceDir)LICENSE" />
         </Component>
       </Directory>
     </StandardDirectory>

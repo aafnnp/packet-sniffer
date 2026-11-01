@@ -143,7 +143,7 @@ jobs:
             echo "pkg_release=$pkg_release"
             echo "num_version=$num_version"
           } >> "$GITHUB_OUTPUT"
-          echo "版本：$version（deb/rpm 版本 $pkg_version-$pkg_release，MSI/pkg 版本 $num_version）"
+          echo "版本：${version}（deb/rpm 版本 ${pkg_version}-${pkg_release}，MSI/pkg 版本 ${num_version}）"
 
       - name: Build release binaries
         shell: bash
@@ -278,12 +278,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $root = (Get-Location).Path -replace '\\', '/'
+          $root = (Get-Location).Path
           $out = Join-Path (Get-Location) "dist\PacketSniffer-${{ steps.version.outputs.version }}-${{ matrix.app_arch }}-setup.exe"
           makensis -V2 `
             "/DAPP_VERSION=${{ steps.version.outputs.version }}" `
             "/DOUTFILE=$out" `
-            "/DSTAGE_DIR=$root/dist/staging" `
+            "/DSTAGE_DIR=$root\dist\staging" `
             "/DDOCS_DIR=$root" `
             packaging\windows\installer.nsi
           if (-not (Test-Path $out)) { throw "NSIS 未生成安装包：$out" }
@@ -300,10 +300,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $root = (Get-Location).Path -replace '\\', '/'
+          $stage = (Join-Path (Get-Location) 'dist\staging') + '\'
           $msi = Join-Path (Get-Location) "dist\PacketSniffer-${{ steps.version.outputs.version }}-${{ matrix.app_arch }}.msi"
           wix build -arch x64 `
-            -d "SourceDir=$root/dist/staging" `
+            -d "SourceDir=$stage" `
             -d "ProductVersion=${{ steps.version.outputs.num_version }}" `
             -o $msi `
             packaging\windows\product.wxs
