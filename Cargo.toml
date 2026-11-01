@@ -1,0 +1,57 @@
+[workspace]
+members = [
+    "crates/common",
+    "crates/proxy-engine",
+    "crates/system-bridge",
+    "crates/desktop",
+    "crates/desktop-ui",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+
+[workspace.dependencies]
+# 公共基础
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+bytes = "1.0"
+async-channel = "2.0"
+indexmap = { version = "2.0", features = ["serde"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
+
+# NSH 原生 UI（Rust 组件，无 JS 运行时）
+nsh-core = "0.3.0"
+nsh-base = "0.3.0"
+nsh-platform-macos = { version = "0.3.0", default-features = false }
+nsh-platform-linux = { version = "0.3.0", default-features = false }
+nsh-platform-windows = { version = "0.3.0", default-features = false }
+
+# 网络与 TLS
+tokio = { version = "1.0", features = ["full"] }
+tokio-util = "0.7"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pki-types = "1.0"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+webpki-roots = "0.26"
+rustls-pemfile = "2.0"
+rcgen = { version = "0.13", default-features = false, features = ["crypto", "pem", "ring", "x509-parser"] }
+hyper = { version = "1.0", features = ["http1", "http2", "client", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http = "1.0"
+http-body-util = "0.1"
+url = "2.0"
+flate2 = "1.0"
+brotli = "6.0"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

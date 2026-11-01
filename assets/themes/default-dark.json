@@ -1,0 +1,18 @@
+{
+  "name": "default-dark",
+  "extends": "system",
+  "colors": {
+    "background": "#0f1115",
+    "surface": "#161a21",
+    "border": "#262c36",
+    "foreground": "#e6e9ef",
+    "muted": "#8b94a3",
+    "hover": "#1d222b",
+    "selection": "#243043",
+    "methodGet": "#34d399",
+    "methodPost": "#fbbf24",
+    "statusSuccess": "#34d399",
+    "statusClientError": "#fbbf24",
+    "statusServerError": "#fb7185"
+  }
+}

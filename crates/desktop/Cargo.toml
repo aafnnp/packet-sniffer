@@ -1,0 +1,28 @@
+[package]
+name = "desktop"
+description = "桌面主程序：命令行子命令与共享状态机；NSH 图形界面见 desktop-ui"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "packet-sniffer"
+path = "src/main.rs"
+
+[dependencies]
+common = { path = "../common" }
+proxy-engine = { path = "../proxy-engine" }
+system-bridge = { path = "../system-bridge" }
+
+tokio.workspace = true
+async-channel.workspace = true
+indexmap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+rusqlite.workspace = true
+

@@ -1,0 +1,11 @@
+[package]
+name = "system-bridge"
+description = "系统能力适配层：系统代理设置与根证书安装，按平台条件编译"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+common = { path = "../common" }
+thiserror.workspace = true
+tracing.workspace = true

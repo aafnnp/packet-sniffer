@@ -1,0 +1,12 @@
+[package]
+name = "common"
+description = "跨包共享的数据结构、错误类型与通用工具"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+uuid.workspace = true

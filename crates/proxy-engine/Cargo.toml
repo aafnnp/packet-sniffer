@@ -1,0 +1,46 @@
+[package]
+name = "proxy-engine"
+description = "抓包核心引擎：HTTP 代理、CONNECT 隧道与基础 MITM，不依赖任何 UI"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+common = { path = "../common" }
+
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-rustls.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
+webpki-roots.workspace = true
+rustls-pemfile.workspace = true
+rcgen.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
+url.workspace = true
+flate2.workspace = true
+brotli.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+common = { path = "../common" }
+rustls-pki-types.workspace = true
+tokio = { workspace = true }
+rcgen.workspace = true
+rustls.workspace = true
+rustls-pemfile.workspace = true
+tokio-rustls.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true

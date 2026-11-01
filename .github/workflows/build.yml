@@ -1,0 +1,138 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  MACOSX_DEPLOYMENT_TARGET: "14.0"
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-4-dev \
+            libpango1.0-dev \
+            libgdk-pixbuf-2.0-dev \
+            libcairo2-dev \
+            libglib2.0-dev \
+            pkg-config
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --locked
+
+      - name: Run tests
+        run: cargo test --workspace --locked
+
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - name: windows-x86_64
+            os: windows-2022
+            target: x86_64-pc-windows-msvc
+          - name: macos-aarch64
+            os: macos-14
+            target: aarch64-apple-darwin
+          - name: macos-x86_64
+            os: macos-14
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-4-dev \
+            libpango1.0-dev \
+            libgdk-pixbuf-2.0-dev \
+            libcairo2-dev \
+            libglib2.0-dev \
+            pkg-config
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: build-${{ matrix.name }}
+          cache-on-failure: true
+
+      - name: Build release binaries
+        run: cargo build --release --locked --workspace --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist staging
+          cp "target/${{ matrix.target }}/release/packet-sniffer" staging/
+          cp "target/${{ matrix.target }}/release/packet-sniffer-ui" staging/
+          cp README.md LICENSE staging/
+          tar -czf "dist/packet-sniffer-${{ matrix.name }}.tar.gz" -C staging .
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path staging, dist | Out-Null
+          Copy-Item -Path @(
+            "target/${{ matrix.target }}/release/packet-sniffer.exe",
+            "target/${{ matrix.target }}/release/packet-sniffer-ui.exe",
+            "README.md",
+            "LICENSE"
+          ) -Destination staging
+          Compress-Archive -Path staging/* -DestinationPath "dist/packet-sniffer-${{ matrix.name }}.zip"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: packet-sniffer-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
