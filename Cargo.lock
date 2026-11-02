@@ -396,7 +396,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "common"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "serde",
@@ -527,7 +527,7 @@ checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
 
 [[package]]
 name = "desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -547,7 +547,7 @@ dependencies = [
 
 [[package]]
 name = "desktop-ui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-channel",
  "chrono",
@@ -2355,7 +2355,7 @@ dependencies = [
 
 [[package]]
 name = "proxy-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "brotli",
  "bytes",
@@ -2995,7 +2995,7 @@ dependencies = [
 
 [[package]]
 name = "system-bridge"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "common",
  "thiserror 1.0.69",

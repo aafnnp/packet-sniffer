@@ -316,7 +316,7 @@ cargo build --release --workspace
 - `.deb` / `.rpm` / pacman 包安装后提供 `/usr/bin/packet-sniffer`（CLI）与 `/usr/bin/packet-sniffer-ui`（图形界面），并注册应用菜单条目与图标；运行期依赖 GTK4（`libgtk-4-1` / `gtk4`）。
 - macOS 用 `lipo` 把 arm64 与 x86_64 合并成通用二进制，一个包覆盖 Intel 与 Apple Silicon。
 - AppImage 不打包 GTK4，运行时需要宿主已安装 GTK4；另外 AppImage 运行时依赖 FUSE2（Ubuntu 24.04 可 `sudo apt install libfuse2t64`），或设置 `APPIMAGE_EXTRACT_AND_RUN=1` 直接解包运行。
-- 非标签构建的版本号形如 `0.1.0+g<提交号>`，便于区分同一版本的多次构建；`SHA256SUMS.txt` 用于校验下载。
+- 非标签构建的版本号形如 `0.2.0+g<提交号>`，便于区分同一版本的多次构建；`SHA256SUMS.txt` 用于校验下载。
 - macOS 产物只有 ad-hoc 签名，未做 Developer ID 签名与公证；首次从网上下载后若提示「无法验证开发者」，可右键「打开」，或执行 `xattr -dr com.apple.quarantine "/Applications/Packet Sniffer.app"`。
 - Windows 的 `.exe` / `.msi` 未做 Authenticode 签名，SmartScreen 会提示未知发布者。
 - WiX 固定在 5.x（v6 起需接受 OSMF 许可）；企业环境可用 MSI 做静默部署（`msiexec /i x.msi /qn`）。
@@ -337,7 +337,7 @@ packet-sniffer install-ca             # 安装根证书（需要管理员权限�
 变更清单按 [Conventional Commits](https://www.conventionalcommits.org/) 前缀归类（`feat` / `fix` / `perf` / `refactor` / `docs` / `test` / `build`、`ci`、`chore`、`style`，其余落入「其他」），所以提交信息请保持 `type(scope): 描述` 的形式。本地预览：
 
 ```bash
-scripts/release-notes.sh v0.1.0
+scripts/release-notes.sh v0.2.0
 ```
 
 ### 本地打包
@@ -346,23 +346,23 @@ scripts/release-notes.sh v0.1.0
 
 ```bash
 # Linux deb / rpm / pacman（需要 nfpm：https://nfpm.goreleaser.com）
-NFPM_ARCH=amd64 NFPM_VERSION=0.1.0 NFPM_RELEASE=1 \
+NFPM_ARCH=amd64 NFPM_VERSION=0.2.0 NFPM_RELEASE=1 \
   nfpm package --config packaging/linux/nfpm.yaml --packager deb \
-  --target dist/packet-sniffer_0.1.0-1_amd64.deb
+  --target dist/packet-sniffer_0.2.0-1_amd64.deb
 
 # Linux AppImage（需联网下载 appimagetool，或用 APPIMAGETOOL 指定本地工具）
-packaging/linux/make-appimage.sh dist/staging 0.1.0 x86_64 dist
+packaging/linux/make-appimage.sh dist/staging 0.2.0 x86_64 dist
 
 # macOS dmg + pkg（系统自带 hdiutil / pkgbuild / codesign）
-packaging/macos/make-packages.sh target/release 0.1.0 universal dist
+packaging/macos/make-packages.sh target/release 0.2.0 universal dist
 
 # Windows NSIS（makensis 的相对路径以脚本目录为基准，故传绝对路径）
-makensis -DAPP_VERSION=0.1.0 -DOUTFILE=<绝对路径>\PacketSniffer-setup.exe \
+makensis -DAPP_VERSION=0.2.0 -DOUTFILE=<绝对路径>\PacketSniffer-setup.exe \
   -DSTAGE_DIR=<仓库根>/dist/staging -DDOCS_DIR=<仓库根> packaging/windows/installer.nsi
 
 # Windows MSI（WiX 5：dotnet tool install --global wix --version 5.*）
 wix build -arch x64 -d SourceDir=<仓库根>/dist/staging -d IconDir=<仓库根>/assets/icons/ \
-  -d ProductVersion=0.1.0 -o dist/PacketSniffer.msi packaging/windows/product.wxs
+  -d ProductVersion=0.2.0 -o dist/PacketSniffer.msi packaging/windows/product.wxs
 
 # winget / Scoop / Chocolatey 清单（需要 Chocolatey）
 pwsh packaging/windows/make-manifests.ps1 -Version 1.2.3 -DistDir dist
