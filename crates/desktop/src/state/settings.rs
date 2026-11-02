@@ -5,7 +5,6 @@ use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
-use proxy_engine::config::UpstreamProxy;
 use proxy_engine::rules::Rule;
 use proxy_engine::EngineConfig;
 use serde::{Deserialize, Serialize};
@@ -31,8 +30,6 @@ pub struct Settings {
     /// 是否在引擎启动后自动接管系统代理。
     pub system_proxy: bool,
     pub theme: Theme,
-    /// 链式代理（例如本机已有的 127.0.0.1:8118），为空表示直连。
-    pub upstream_proxy: Option<UpstreamProxy>,
     /// 请求 / 响应规则。
     #[serde(default)]
     pub rules: Vec<Rule>,
@@ -49,7 +46,6 @@ impl Default for Settings {
             ca_dir: engine.ca_dir,
             system_proxy: false,
             theme: Theme::System,
-            upstream_proxy: None,
             rules: Vec::new(),
         }
     }
@@ -92,7 +88,6 @@ impl Settings {
             .with_max_body_bytes(self.max_body_bytes)
             .with_store_capacity(self.store_capacity)
             .with_ca_dir(self.ca_dir.clone())
-            .with_upstream_proxy(self.upstream_proxy.clone())
             .with_rules(self.rules.clone())
     }
 
@@ -157,7 +152,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_settings_without_upstream_proxy_still_parse() {
+    fn legacy_settings_with_removed_fields_still_parse() {
         let path = temp_path("legacy");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(
@@ -169,14 +164,16 @@ mod tests {
                 "store_capacity": 100,
                 "ca_dir": "/tmp/certs",
                 "system_proxy": false,
-                "theme": "dark"
+                "theme": "dark",
+                "upstream_proxy": { "host": "127.0.0.1", "port": 8118 }
             }"#,
         )
         .unwrap();
 
         let loaded = Settings::load(&path);
         assert_eq!(loaded.theme, Theme::Dark);
-        assert!(loaded.upstream_proxy.is_none());
+        assert_eq!(loaded.max_body_bytes, 1024);
+        assert_eq!(loaded.store_capacity, 100);
         fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 
@@ -203,22 +200,6 @@ mod tests {
         assert_eq!(loaded.rules[0].name, "mock");
         assert_eq!(loaded.engine_config().rules.len(), 1);
         fs::remove_dir_all(path.parent().unwrap()).ok();
-    }
-
-    #[test]
-    fn engine_config_carries_upstream_proxy() {
-        let settings = Settings {
-            upstream_proxy: Some(UpstreamProxy::new("127.0.0.1", 8118)),
-            ..Settings::default()
-        };
-        let config = settings.engine_config();
-        assert_eq!(
-            config
-                .upstream_proxy
-                .as_ref()
-                .map(|proxy| proxy.authority()),
-            Some("127.0.0.1:8118".to_string())
-        );
     }
 
     #[test]

@@ -6,15 +6,15 @@ use std::time::Duration;
 use ::http::{Request, Response};
 use common::types::Scheme;
 use hyper::body::Incoming;
-use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::server::conn::auto;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use crate::proxy::{connect, http};
-use crate::{ProxyBody, ProxyContext, Result};
+use crate::{EngineError, ProxyBody, ProxyContext, Result};
 
 /// 监听循环，直到收到停止信号。
 pub(crate) async fn serve(
@@ -63,11 +63,12 @@ async fn serve_connection(stream: TcpStream, ctx: Arc<ProxyContext>) -> Result<(
         }
     });
 
-    http1::Builder::new()
-        .keep_alive(true)
-        .serve_connection(TokioIo::new(stream), service)
-        .with_upgrades()
-        .await?;
+    // 明文入口没有 TLS 可供协商，交给自动检测：客户端可以直接发 HTTP/1.1，
+    // 也可以用 h2c prior knowledge（HTTP/2 preface）。Upgrade 只在 h1 分支生效。
+    auto::Builder::new(TokioExecutor::new())
+        .serve_connection_with_upgrades(TokioIo::new(stream), service)
+        .await
+        .map_err(|err| EngineError::Other(format!("连接处理失败：{err}")))?;
 
     Ok(())
 }

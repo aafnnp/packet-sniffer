@@ -11,16 +11,14 @@ use http::header::{HeaderName, HeaderValue};
 use http::{Request, Response, StatusCode, Version};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
-use hyper::client::conn::http1 as client_http1;
-use hyper_util::rt::TokioIo;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::protocol::body::{BodyRecorder, RecordingBody};
 use crate::protocol::http1::{self, RequestTarget};
-use crate::proxy::upstream;
+use crate::proxy::{pool, upstream};
 use crate::rules::{self, RuleAction};
-use crate::{BoxError, EngineError, ProxyBody, ProxyContext, Result};
+use crate::{BoxError, ProxyBody, ProxyContext, Result};
 
 /// 处理一个普通 HTTP 请求（代理 absolute-form 或 MITM 后的 origin-form）。
 pub(crate) async fn handle(
@@ -48,6 +46,7 @@ async fn forward(
     let clock = Instant::now();
 
     let (parts, body) = req.into_parts();
+    let client_version = parts.version;
     let target = http1::resolve_target(
         &parts.uri,
         &parts.headers,
@@ -85,63 +84,102 @@ async fn forward(
 
     let matched = rules::matching(&ctx.config.rules, &captured_request);
     if let Some(rule) = rules::terminal(&matched) {
-        return short_circuit(&ctx, rule, &matched, captured_request, clock);
+        return short_circuit(
+            &ctx,
+            rule,
+            &matched,
+            captured_request,
+            clock,
+            client_version,
+        );
     }
 
-    let mut upstream_request = Request::builder()
-        .method(parts.method.clone())
-        .uri(target.path.clone())
-        .version(Version::HTTP_11)
-        .body(request_body)?;
+    let pool_key = pool::PoolKey::new(
+        target.host.clone(),
+        target.port,
+        target.scheme == Scheme::Https,
+    );
+    let (mut sender, upstream_protocol) = match ctx.pool.acquire(&pool_key) {
+        // 复用已有的 HTTP/2 连接：同一连接上再开一条流。
+        Some(sender) => (sender, upstream::UpstreamProtocol::Http2),
+        None => {
+            let stream = match upstream::connect(
+                &target.host,
+                target.port,
+                target.scheme == Scheme::Https,
+                ctx.config.connect_timeout,
+                ctx.tls_client.clone(),
+            )
+            .await
+            {
+                Ok(stream) => stream,
+                Err(err) => {
+                    record_failure(
+                        &ctx,
+                        captured_request,
+                        &request_recorder,
+                        clock,
+                        err.to_string(),
+                    );
+                    return Err(err);
+                }
+            };
+
+            match upstream::handshake(stream).await {
+                Ok((sender, protocol)) => {
+                    // 只有 HTTP/2 连接可以留在池里给后续请求复用。
+                    if let Some(pooled) = sender.reuse() {
+                        ctx.pool.store(pool_key, pooled);
+                    }
+                    (sender, protocol)
+                }
+                Err(err) => {
+                    record_failure(
+                        &ctx,
+                        captured_request,
+                        &request_recorder,
+                        clock,
+                        err.to_string(),
+                    );
+                    return Err(err);
+                }
+            }
+        }
+    };
+
+    debug!(
+        host = %target.host,
+        protocol = upstream_protocol.as_str(),
+        "上游连接已建立"
+    );
+
     let mut upstream_headers = http1::filter_headers(&parts.headers);
+    let (upstream_uri, upstream_version) = match upstream_protocol {
+        upstream::UpstreamProtocol::Http1 => {
+            // h1 上游需要 Host：HTTP/2 客户端不发该首部，隧道内的 Host 也可能与真实目标不一致。
+            if let Ok(value) = HeaderValue::from_str(&target.authority()) {
+                upstream_headers.insert(::http::header::HOST, value);
+            }
+            (target.path.clone(), Version::HTTP_11)
+        }
+        upstream::UpstreamProtocol::Http2 => {
+            // HTTP/2 用 `:authority` 表达目标，Host 首部多余且可能与 URI 冲突。
+            upstream_headers.remove(::http::header::HOST);
+            (target.url.clone(), Version::HTTP_2)
+        }
+    };
     for rule in &matched {
         if let RuleAction::AddRequestHeader { name, value } = &rule.action {
             apply_header(&mut upstream_headers, name, value, "请求头规则");
         }
     }
+
+    let mut upstream_request = Request::builder()
+        .method(parts.method.clone())
+        .uri(upstream_uri)
+        .version(upstream_version)
+        .body(request_body)?;
     *upstream_request.headers_mut() = upstream_headers;
-
-    let stream = match upstream::connect(
-        &target.host,
-        target.port,
-        target.scheme == Scheme::Https,
-        ctx.config.connect_timeout,
-        ctx.tls_client.clone(),
-        ctx.config.upstream_proxy.as_ref(),
-    )
-    .await
-    {
-        Ok(stream) => stream,
-        Err(err) => {
-            record_failure(
-                &ctx,
-                captured_request,
-                &request_recorder,
-                clock,
-                err.to_string(),
-            );
-            return Err(err);
-        }
-    };
-
-    let (mut sender, connection) = match client_http1::handshake(TokioIo::new(stream)).await {
-        Ok(parts) => parts,
-        Err(err) => {
-            record_failure(
-                &ctx,
-                captured_request,
-                &request_recorder,
-                clock,
-                err.to_string(),
-            );
-            return Err(EngineError::Http(err));
-        }
-    };
-    tokio::spawn(async move {
-        if let Err(err) = connection.await {
-            debug!(error = %err, "上游连接关闭");
-        }
-    });
 
     let response = match sender.send_request(upstream_request).await {
         Ok(response) => response,
@@ -160,7 +198,7 @@ async fn forward(
             };
             ctx.store.upsert(exchange.clone());
             ctx.emit(EngineEvent::RequestCompleted { exchange });
-            return Err(EngineError::Http(err));
+            return Err(err);
         }
     };
 
@@ -172,7 +210,8 @@ async fn forward(
 
     let mut client_response = Response::builder()
         .status(response_parts.status)
-        .version(Version::HTTP_11)
+        // 对客户端而言响应就是它协商到的版本（h2 客户端收到 h2 响应）。
+        .version(client_version)
         .body(tapped_body)?;
     let mut response_headers = http1::filter_headers(&response_parts.headers);
     for rule in &matched {
@@ -196,6 +235,8 @@ async fn forward(
     // 响应体仍在向客户端流动，等它读完（或超时）后再把完整记录入库并通知 UI。
     let capture_ctx = ctx.clone();
     tokio::spawn(async move {
+        // 发送端要活到响应体读完：HTTP/2 下提前丢弃会触发 GOAWAY 并可能截断 body。
+        let _sender = sender;
         let _ = tokio::time::timeout(idle_timeout, &mut response_done).await;
         let snapshot = response_recorder.snapshot();
 
@@ -207,6 +248,7 @@ async fn forward(
             body: snapshot.bytes,
             body_truncated: snapshot.truncated,
             body_complete: snapshot.finished,
+            trailers: snapshot.trailers,
             received_at: Utc::now(),
         };
 
@@ -267,6 +309,7 @@ fn short_circuit(
     matched: &[&rules::Rule],
     mut captured_request: CapturedRequest,
     clock: Instant,
+    client_version: Version,
 ) -> Result<Response<ProxyBody>> {
     let (status, content_type, body) = match &rule.action {
         RuleAction::Block { status } => (
@@ -312,11 +355,12 @@ fn short_circuit(
     let captured_response = CapturedResponse {
         status: status_code.as_u16(),
         status_text: http1::status_text(status_code),
-        version: "HTTP/1.1".to_string(),
+        version: http1::version_to_string(client_version),
         headers: http1::header_map_to_headers(&headers),
         body: bytes.to_vec(),
         body_truncated: false,
         body_complete: true,
+        trailers: Vec::new(),
         received_at: Utc::now(),
     };
     let exchange = CapturedExchange {
@@ -331,6 +375,7 @@ fn short_circuit(
 
     let mut response = Response::new(Full::new(bytes).map_err(|never| match never {}).boxed());
     *response.status_mut() = status_code;
+    *response.version_mut() = client_version;
     *response.headers_mut() = headers;
     Ok(response)
 }

@@ -22,7 +22,9 @@ APPDIR="$WORK_DIR/AppDir"
 mkdir -p "$APPDIR/usr/bin" \
   "$APPDIR/usr/share/applications" \
   "$APPDIR/usr/share/icons/hicolor/scalable/apps" \
-  "$APPDIR/usr/share/icons/hicolor/256x256/apps"
+  "$APPDIR/usr/share/icons/hicolor/128x128/apps" \
+  "$APPDIR/usr/share/icons/hicolor/256x256/apps" \
+  "$APPDIR/usr/share/icons/hicolor/512x512/apps"
 
 install -m 0755 "$BIN_DIR/packet-sniffer" "$APPDIR/usr/bin/packet-sniffer"
 install -m 0755 "$BIN_DIR/packet-sniffer-ui" "$APPDIR/usr/bin/packet-sniffer-ui"
@@ -30,14 +32,16 @@ install -m 0644 "$ROOT_DIR/packaging/linux/packet-sniffer.desktop" \
   "$APPDIR/usr/share/applications/packet-sniffer.desktop"
 install -m 0644 "$ROOT_DIR/packaging/linux/packet-sniffer.desktop" \
   "$APPDIR/packet-sniffer.desktop"
-install -m 0644 "$ROOT_DIR/packaging/linux/packet-sniffer.svg" \
+install -m 0644 "$ROOT_DIR/assets/icons/packet-sniffer.svg" \
   "$APPDIR/usr/share/icons/hicolor/scalable/apps/packet-sniffer.svg"
-install -m 0644 "$ROOT_DIR/packaging/linux/packet-sniffer.png" \
-  "$APPDIR/usr/share/icons/hicolor/256x256/apps/packet-sniffer.png"
+for size in 128 256 512; do
+  install -m 0644 "$ROOT_DIR/assets/icons/png/packet-sniffer-$size.png" \
+    "$APPDIR/usr/share/icons/hicolor/${size}x${size}/apps/packet-sniffer.png"
+done
 # appimagetool 要求 .DirIcon 是 PNG，SVG 会直接拒绝打包
-install -m 0644 "$ROOT_DIR/packaging/linux/packet-sniffer.png" "$APPDIR/packet-sniffer.png"
+install -m 0644 "$ROOT_DIR/assets/icons/png/packet-sniffer-256.png" "$APPDIR/packet-sniffer.png"
 ln -s packet-sniffer.png "$APPDIR/.DirIcon"
-install -m 0644 "$ROOT_DIR/packaging/linux/packet-sniffer.svg" "$APPDIR/packet-sniffer.svg"
+install -m 0644 "$ROOT_DIR/assets/icons/packet-sniffer.svg" "$APPDIR/packet-sniffer.svg"
 
 cat > "$APPDIR/AppRun" <<'APPRUN'
 #!/bin/sh

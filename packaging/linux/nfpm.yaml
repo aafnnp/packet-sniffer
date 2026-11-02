@@ -13,7 +13,7 @@ section: net
 priority: optional
 maintainer: aafnnp <aafnnp@users.noreply.github.com>
 vendor: aafnnp
-homepage: https://github.com/aafnnp/package-sniffer
+homepage: https://github.com/aafnnp/packet-sniffer
 license: MIT
 description: |
   Packet Sniffer 是基于 NSH 原生 UI 的 HTTP/HTTPS 抓包代理工作台。
@@ -32,12 +32,20 @@ contents:
     dst: /usr/share/applications/packet-sniffer.desktop
     file_info:
       mode: 0644
-  - src: packaging/linux/packet-sniffer.svg
+  - src: assets/icons/packet-sniffer.svg
     dst: /usr/share/icons/hicolor/scalable/apps/packet-sniffer.svg
     file_info:
       mode: 0644
-  - src: packaging/linux/packet-sniffer.png
+  - src: assets/icons/png/packet-sniffer-128.png
+    dst: /usr/share/icons/hicolor/128x128/apps/packet-sniffer.png
+    file_info:
+      mode: 0644
+  - src: assets/icons/png/packet-sniffer-256.png
     dst: /usr/share/icons/hicolor/256x256/apps/packet-sniffer.png
+    file_info:
+      mode: 0644
+  - src: assets/icons/png/packet-sniffer-512.png
+    dst: /usr/share/icons/hicolor/512x512/apps/packet-sniffer.png
     file_info:
       mode: 0644
   - src: README.md

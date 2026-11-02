@@ -6,9 +6,10 @@ use ::http::{Request, Response, StatusCode};
 use common::types::Scheme;
 use hyper::body::Incoming;
 use hyper::server::conn::http1 as server_http1;
+use hyper::server::conn::http2 as server_http2;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, BufReader};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsAcceptor;
@@ -93,7 +94,13 @@ async fn handle_tunnel(
         info!(host, port, "开始解密 HTTPS 会话");
         let acceptor = TlsAcceptor::from(tls::server_config(ctx.ca.clone()));
         match acceptor.accept(client).await {
-            Ok(stream) => serve(ctx, Scheme::Https, Some(authority), stream).await,
+            Ok(stream) => {
+                let http2 = tls::is_http2(stream.get_ref().1.alpn_protocol());
+                if http2 {
+                    info!(host, port, "已与客户端协商 HTTP/2");
+                }
+                serve(ctx, Scheme::Https, Some(authority), stream, http2).await
+            }
             Err(err) => {
                 info!(host, error = %err, "TLS 握手失败，客户端可能尚未信任本地根证书");
                 Ok(())
@@ -101,34 +108,47 @@ async fn handle_tunnel(
         }
     } else {
         // 明文隧道（例如 CONNECT 到 80 端口），按 HTTP/1.1 直接解析。
-        serve(ctx, Scheme::Http, Some(authority), client).await
+        serve(ctx, Scheme::Http, Some(authority), client, false).await
     }
 }
 
-/// 在已建立的流上提供 HTTP/1.1 服务。
+/// 在已建立的流上提供 HTTP 服务：`http2` 为真时用 HTTP/2，否则用带 Upgrade 支持的 HTTP/1.1。
 async fn serve<S>(
     ctx: Arc<ProxyContext>,
     scheme: Scheme,
     tunnel_authority: Option<String>,
     stream: S,
+    http2: bool,
 ) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let service = service_fn(move |req: Request<Incoming>| {
+    // 两条分支都要各自构造服务闭包，因此用工厂函数避免 `service_fn` 无法克隆的问题。
+    let service = || {
         let ctx = ctx.clone();
         let tunnel_authority = tunnel_authority.clone();
-        async move {
-            Ok::<_, std::convert::Infallible>(
-                http::handle(ctx, scheme, tunnel_authority, req).await,
-            )
-        }
-    });
+        service_fn(move |req: Request<Incoming>| {
+            let ctx = ctx.clone();
+            let tunnel_authority = tunnel_authority.clone();
+            async move {
+                Ok::<_, std::convert::Infallible>(
+                    http::handle(ctx, scheme, tunnel_authority, req).await,
+                )
+            }
+        })
+    };
 
-    server_http1::Builder::new()
-        .serve_connection(TokioIo::new(stream), service)
-        .with_upgrades()
-        .await?;
+    if http2 {
+        // HTTP/2 没有 HTTP/1.1 的 Upgrade 语义，WebSocket 仍走 h1 通道。
+        server_http2::Builder::new(TokioExecutor::new())
+            .serve_connection(TokioIo::new(stream), service())
+            .await?;
+    } else {
+        server_http1::Builder::new()
+            .serve_connection(TokioIo::new(stream), service())
+            .with_upgrades()
+            .await?;
+    }
 
     Ok(())
 }

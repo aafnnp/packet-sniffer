@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Packet Sniffer">
-  <rect x="2" y="2" width="60" height="60" rx="14" fill="#2b6cb0"/>
-  <circle cx="28" cy="28" r="13" fill="none" stroke="#ffffff" stroke-width="5"/>
-  <line x1="38" y1="38" x2="50" y2="50" stroke="#ffffff" stroke-width="6" stroke-linecap="round"/>
-  <path d="M20 24h16M20 30h11" stroke="#ffffff" stroke-width="3" stroke-linecap="round" opacity="0.9"/>
-</svg>

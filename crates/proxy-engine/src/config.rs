@@ -4,87 +4,12 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use common::utils::base64_encode;
-use common::CommonError;
 use serde::{Deserialize, Serialize};
 
 use crate::rules::Rule;
 
 /// 默认监听端口。
 pub const DEFAULT_PORT: u16 = 8899;
-
-/// 链式代理目标：把请求再交给另一个 HTTP 代理（企业代理、本地代理客户端等）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UpstreamProxy {
-    pub host: String,
-    pub port: u16,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub username: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub password: Option<String>,
-}
-
-impl UpstreamProxy {
-    pub fn new(host: impl Into<String>, port: u16) -> Self {
-        Self {
-            host: host.into(),
-            port,
-            username: None,
-            password: None,
-        }
-    }
-
-    /// 解析 `host:port` 或 `http://user:password@host:port`。
-    pub fn parse(value: &str) -> Result<Self, CommonError> {
-        let value = value.trim();
-        if value.is_empty() {
-            return Err(CommonError::InvalidAuthority(value.to_string()));
-        }
-
-        let normalized = if value.contains("://") {
-            value.to_string()
-        } else {
-            format!("http://{value}")
-        };
-        let url = url::Url::parse(&normalized)
-            .map_err(|err| CommonError::InvalidUrl(format!("{value}：{err}")))?;
-
-        if !matches!(url.scheme(), "http" | "https") {
-            return Err(CommonError::InvalidUrl(format!(
-                "{value}：只支持 http/https 代理"
-            )));
-        }
-
-        let host = url
-            .host_str()
-            .ok_or_else(|| CommonError::InvalidAuthority(value.to_string()))?
-            .to_string();
-        let port = url
-            .port()
-            .ok_or_else(|| CommonError::InvalidPort(value.to_string()))?;
-
-        Ok(Self {
-            host,
-            port,
-            username: (!url.username().is_empty()).then(|| url.username().to_string()),
-            password: url.password().map(str::to_string),
-        })
-    }
-
-    pub fn authority(&self) -> String {
-        format!("{}:{}", self.host, self.port)
-    }
-
-    /// `Proxy-Authorization` 首部值（Basic 认证）。
-    pub fn authorization_header(&self) -> Option<String> {
-        let username = self.username.as_deref()?;
-        let raw = format!(
-            "{username}:{}",
-            self.password.as_deref().unwrap_or_default()
-        );
-        Some(format!("Basic {}", base64_encode(raw.as_bytes())))
-    }
-}
 
 /// 抓包引擎的运行配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,11 +33,23 @@ pub struct EngineConfig {
     /// 额外的上游信任根证书（PEM）。用于上游已被企业代理二次拦截的场景，
     /// 未配置时只信任系统内置的 Mozilla 根证书集合。
     pub upstream_extra_root: Option<PathBuf>,
-    /// 链式代理：为空表示直连；配置后所有上游连接先经该代理建立隧道。
-    pub upstream_proxy: Option<UpstreamProxy>,
+    /// 上游 HTTP/2 连接的空闲回收时间；为 0 时关闭连接复用。
+    #[serde(default = "default_pool_idle")]
+    pub upstream_pool_idle: Duration,
+    /// 每个上游目标最多保留的 HTTP/2 连接数；为 0 时关闭连接复用。
+    #[serde(default = "default_pool_max_per_host")]
+    pub upstream_pool_max_per_host: usize,
     /// 请求 / 响应规则，按顺序匹配。
     #[serde(default)]
     pub rules: Vec<Rule>,
+}
+
+fn default_pool_idle() -> Duration {
+    Duration::from_secs(90)
+}
+
+fn default_pool_max_per_host() -> usize {
+    4
 }
 
 impl Default for EngineConfig {
@@ -127,7 +64,8 @@ impl Default for EngineConfig {
             connect_timeout: Duration::from_secs(10),
             body_idle_timeout: Duration::from_secs(120),
             upstream_extra_root: None,
-            upstream_proxy: None,
+            upstream_pool_idle: default_pool_idle(),
+            upstream_pool_max_per_host: default_pool_max_per_host(),
             rules: Vec::new(),
         }
     }
@@ -173,13 +111,15 @@ impl EngineConfig {
         self
     }
 
-    pub fn with_upstream_proxy(mut self, proxy: Option<UpstreamProxy>) -> Self {
-        self.upstream_proxy = proxy;
+    pub fn with_rules(mut self, rules: Vec<Rule>) -> Self {
+        self.rules = rules;
         self
     }
 
-    pub fn with_rules(mut self, rules: Vec<Rule>) -> Self {
-        self.rules = rules;
+    /// 调整上游连接池；`max_per_host` 为 0 或 `idle` 为 0 时关闭复用。
+    pub fn with_upstream_pool(mut self, idle: Duration, max_per_host: usize) -> Self {
+        self.upstream_pool_idle = idle;
+        self.upstream_pool_max_per_host = max_per_host;
         self
     }
 
@@ -222,44 +162,20 @@ mod tests {
     }
 
     #[test]
+    fn upstream_pool_is_configurable() {
+        let config = EngineConfig::new().with_upstream_pool(Duration::from_secs(5), 2);
+        assert_eq!(config.upstream_pool_idle, Duration::from_secs(5));
+        assert_eq!(config.upstream_pool_max_per_host, 2);
+
+        let disabled = EngineConfig::new().with_upstream_pool(Duration::from_secs(5), 0);
+        assert_eq!(disabled.upstream_pool_max_per_host, 0);
+    }
+
+    #[test]
     fn ca_paths_live_in_ca_dir() {
         let config = EngineConfig::new().with_ca_dir("/tmp/pk");
         assert_eq!(config.ca_cert_path(), PathBuf::from("/tmp/pk/root-ca.pem"));
         assert_eq!(config.ca_key_path(), PathBuf::from("/tmp/pk/root-ca.key"));
-    }
-
-    #[test]
-    fn parses_upstream_proxy_forms() {
-        assert_eq!(
-            UpstreamProxy::parse("127.0.0.1:8118").unwrap(),
-            UpstreamProxy::new("127.0.0.1", 8118)
-        );
-        assert_eq!(
-            UpstreamProxy::parse("http://10.0.0.2:3128").unwrap(),
-            UpstreamProxy::new("10.0.0.2", 3128)
-        );
-
-        let with_auth = UpstreamProxy::parse("http://user:pass@127.0.0.1:8118").unwrap();
-        assert_eq!(with_auth.username.as_deref(), Some("user"));
-        assert_eq!(with_auth.password.as_deref(), Some("pass"));
-        assert_eq!(
-            with_auth.authorization_header().as_deref(),
-            Some("Basic dXNlcjpwYXNz")
-        );
-    }
-
-    #[test]
-    fn rejects_invalid_upstream_proxy() {
-        assert!(UpstreamProxy::parse("").is_err());
-        assert!(UpstreamProxy::parse("socks5://127.0.0.1:1080").is_err());
-        assert!(UpstreamProxy::parse("127.0.0.1").is_err());
-    }
-
-    #[test]
-    fn builder_sets_upstream_proxy() {
-        let proxy = UpstreamProxy::new("127.0.0.1", 8118);
-        let config = EngineConfig::new().with_upstream_proxy(Some(proxy.clone()));
-        assert_eq!(config.upstream_proxy, Some(proxy));
     }
 
     #[test]

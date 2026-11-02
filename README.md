@@ -1,6 +1,6 @@
 # Packet Sniffer
 
-[![Build](https://github.com/aafnnp/package-sniffer/actions/workflows/build.yml/badge.svg)](https://github.com/aafnnp/package-sniffer/actions/workflows/build.yml)
+[![Build](https://github.com/aafnnp/packet-sniffer/actions/workflows/build.yml/badge.svg)](https://github.com/aafnnp/packet-sniffer/actions/workflows/build.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 本地 HTTP / HTTPS 抓包与调试工具。抓包引擎是独立的 Rust 库，界面使用 [NSH](https://nsh.dev/zh-CN/docs/) 的 Rust 原生组件（macOS AppKit / Windows / Linux GTK4），**不包含 TSX、QuickJS 或 JS 运行时**。布局参考 [Proxyman](https://proxyman.com/)：左侧来源列表、中间请求表格、底部请求 / 响应并列检查器。
@@ -8,7 +8,7 @@
 ```
 客户端 ──► packet-sniffer (127.0.0.1:8899)
              ├─ 明文 HTTP ───────────────────────► 上游
-             └─ CONNECT → MITM (rustls) ─────────► 上游（可经链式代理）
+             └─ CONNECT → MITM (rustls) ─────────► 上游
                     │
         EngineEvent (broadcast) → EventBridge (async-channel)
                     │
@@ -23,11 +23,12 @@
 
 | 能力 | 说明 |
 |------|------|
-| HTTP 代理 | HTTP/1.1 明文转发，HTTP / HTTPS 统一抓取 |
+| HTTP 代理 | 明文入口支持 HTTP/1.1 与 h2c（HTTP/2 prior knowledge），HTTP / HTTPS 统一抓取 |
+| HTTP/2 双向 | MITM 与上游都按 ALPN 协商 `h2` / `http/1.1`，两侧协议相互独立（可 h2→h1 降级或 h1→h2 升级）；记录里请求记客户端协议、响应记上游协议，并采集响应尾部首部 |
+| 上游连接复用 | HTTP/2 连接按 `(host, port, TLS)` 池化，同一目标的并发请求复用一条连接开多条流；空闲 90s 或连接关闭后自动回收，可通过 `EngineConfig::with_upstream_pool` 调整或关闭 |
 | HTTPS 解密 | CONNECT 隧道 + MITM；首次启动生成根 CA，按 SNI 动态签发带 SAN 的叶子证书（缓存上限 512 个） |
 | 只转发模式 | 关闭解密后 CONNECT 仅做透明隧道转发 |
 | 响应体解压 | 自动解开 `gzip` / `deflate` / `br`，并按解码后的内容展示 |
-| 链式代理 | 把请求先交给上游 HTTP 代理（企业代理、Clash / MonoProxy 等），支持 `host:port` 形式的内嵌 Basic 认证 |
 | 自定义上游信任根 | 上游已被企业代理二次拦截时，可追加 PEM 根证书，无需关闭证书校验 |
 | 规则引擎 | 按方法 / URL 子串 / 域名后缀匹配，执行阻断、模拟响应、请求或响应首部增改 |
 | 请求记录 | 内存环形存储；图形界面另行写入 SQLite（WAL）持久化历史、高亮与备注，重启后恢复 |
@@ -44,14 +45,16 @@ Proxy/
 ├── LICENSE                     # MIT
 ├── assets/
 │   ├── cert/README.md          # 可选的固定根证书说明（默认在运行时生成）
+│   ├── icons/                  # 应用图标：SVG 母版 + PNG / ICO / ICNS
 │   └── themes/default-dark.json
 ├── scripts/
+│   ├── make-icons.sh           # 由 SVG 重新生成各平台图标
 │   └── verify.sh               # 端到端自检脚本
 ├── crates/
 │   ├── common/                 # 跨包共享类型与工具，不依赖网络 / TLS / UI
 │   │   └── src/{types,error,utils}.rs
 │   ├── proxy-engine/           # 抓包核心引擎，纯逻辑、无 UI 依赖
-│   │   ├── src/config.rs       # EngineConfig / UpstreamProxy 与默认值
+│   │   ├── src/config.rs       # EngineConfig 与默认值
 │   │   ├── src/rules.rs        # 规则匹配与动作
 │   │   ├── src/protocol/       # http1 解析、body 录制包装、响应体解压
 │   │   ├── src/proxy/          # tcp 监听、http 转发、CONNECT 隧道、上游连接
@@ -67,12 +70,12 @@ Proxy/
 │   │   └── src/storage.rs      # SQLite 历史记录、高亮与备注（供图形界面使用）
 │   └── desktop-ui/             # NSH 原生图形界面
 │       ├── nsh.json            # NSH 应用描述（根组件 App）
+│       ├── build.rs            # Windows 下把图标与版本信息嵌入 exe
 │       ├── src/main.rs         # 挂载平台后端并启动窗口
 │       ├── src/lib.rs          # 根组件、120ms 轮询与快捷键
 │       ├── src/model.rs        # 引擎生命周期、筛选、排序、选中与详情
 │       ├── src/{format,theme}.rs
 │       └── src/ui/             # chrome / table / inspector / settings / rules / widgets / icons
-└── ui-legacy/                  # 早期 TSX 原型，仅作设计参考，不参与构建
 ```
 
 ### 设计要点
@@ -160,11 +163,11 @@ curl -x http://127.0.0.1:8899 --noproxy "" http://127.0.0.1:18080/index.html
 curl -x http://127.0.0.1:8899 --cacert root-ca.pem https://example.com/
 ```
 
-运行完整自检（监听、状态页、明文抓包、MITM 解密、系统信任、链式代理）：
+运行完整自检（监听、状态页、明文抓包、MITM 解密、系统信任、系统代理）：
 
 ```bash
 cargo run -p desktop -- run --port 8899   # 另开一个终端
-scripts/verify.sh http://127.0.0.1:8899 127.0.0.1:8118
+scripts/verify.sh http://127.0.0.1:8899
 ```
 
 ## 五、命令行参考
@@ -185,7 +188,6 @@ packet-sniffer --help
 | `--ca-dir <目录>` | `~/.packet-sniffer/certs` | 根证书目录 |
 | `--settings <文件>` | `~/.packet-sniffer/settings.json` | 设置文件路径 |
 | `--no-capture` / `--capture` | `--capture` | 关闭 / 开启 HTTPS 解密 |
-| `--upstream-proxy <地址>` | 直连 | 链式代理，如 `http://127.0.0.1:8118` 或 `user:pass@10.0.0.2:3128` |
 | `--max-body <字节>` | `2097152`（2 MiB） | 单个 body 抓取上限 |
 | `--store-capacity <条>` | `2000` | 内存存储条数上限 |
 | `--json` | 关闭 | `run` 模式下额外输出完整记录的 JSON 行 |
@@ -205,7 +207,6 @@ packet-sniffer --help
   "ca_dir": "/Users/<name>/.packet-sniffer/certs",
   "system_proxy": false,
   "theme": "system",
-  "upstream_proxy": { "host": "127.0.0.1", "port": 8118 },
   "rules": []
 }
 ```
@@ -219,7 +220,6 @@ packet-sniffer --help
 | `ca_dir` | 根证书与私钥目录，文件为 `root-ca.pem` / `root-ca.key` |
 | `system_proxy` | 引擎启动后是否自动接管系统代理（默认关闭） |
 | `theme` | `system` / `light` / `dark` |
-| `upstream_proxy` | 链式代理 `{ host, port, username?, password? }`，`null` 表示直连 |
 | `rules` | 规则列表，见下节 |
 
 引擎层固定默认值（`EngineConfig`）：根证书 CN 为 `Packet Sniffer Local CA`，连接上游超时 10s，等待响应体读完最长 120s。
@@ -260,7 +260,7 @@ packet-sniffer --help
 - **右键菜单**：复制 URL、复制为 cURL、复制请求 / 响应原文、固定、高亮颜色、导出筛选结果、删除单条（清空全部在工具栏）。
 - **检查器**：请求与响应并列。请求有概要、首部、查询参数、正文、原始 HTTP；响应有概要、首部、正文、原始、JSON 美化。JSON 正文用只读编辑器展示：自动格式化、语法高亮、行号与折叠；其余正文带行号，二进制以十六进制展示。顶部可选择高亮色并填写备注。
 - **规则页**：新增 / 编辑 / 删除规则，应用后自动重启引擎。
-- **设置页**：监听端口、上游代理、正文上限、HTTPS 解密、系统代理接管、外观、根证书状态 / 安装与导出、历史库路径 / 条数与清空。
+- **设置页**：监听端口、正文上限、HTTPS 解密、系统代理接管、外观、根证书状态 / 安装与导出、历史库路径 / 条数与清空。
 - **快捷键**：`⌘F` 聚焦筛选框，`⌘K` 清空请求，`⌘,` 打开设置。
 
 导出的请求列表写到 `~/Downloads/packet-sniffer-requests-<时间戳>.json`，包含当前筛选与排序结果。
@@ -286,7 +286,7 @@ cargo test --workspace --locked
 cargo build --release --workspace
 ```
 
-当前状态：`cargo test --workspace` 全部通过（共 104 个单元 / 集成测试，含 `proxy-engine/tests/proxy_e2e.rs`）；`cargo clippy` 仅剩 `ProxyContext::log` 未被使用的提示。
+当前状态：`cargo test --workspace` 全部通过（共 95 个单元 / 集成测试，含 `proxy-engine/tests/proxy_e2e.rs`）；`cargo clippy` 仅剩 `ProxyContext::log` 未被使用的提示。
 
 ## 十一、CI 与构建产物
 
@@ -320,6 +320,7 @@ cargo build --release --workspace
 - macOS 产物只有 ad-hoc 签名，未做 Developer ID 签名与公证；首次从网上下载后若提示「无法验证开发者」，可右键「打开」，或执行 `xattr -dr com.apple.quarantine "/Applications/Packet Sniffer.app"`。
 - Windows 的 `.exe` / `.msi` 未做 Authenticode 签名，SmartScreen 会提示未知发布者。
 - WiX 固定在 5.x（v6 起需接受 OSMF 许可）；企业环境可用 MSI 做静默部署（`msiexec /i x.msi /qn`）。
+- 应用图标以 [`assets/icons/packet-sniffer.svg`](assets/icons/packet-sniffer.svg) 为母版，`.png` / `.ico` / `.icns` 已随仓库提供；改动母版后执行 `scripts/make-icons.sh` 重新生成（需要 `rsvg-convert`，`.icns` 另需 macOS 的 `iconutil`）。Linux 打包安装 hicolor 多尺寸 PNG 与 SVG，macOS 用 `.icns`，Windows 安装包快捷方式与 `packet-sniffer-ui.exe` 用 `.ico`。
 
 安装完成后：
 
@@ -360,8 +361,8 @@ makensis -DAPP_VERSION=0.1.0 -DOUTFILE=<绝对路径>\PacketSniffer-setup.exe \
   -DSTAGE_DIR=<仓库根>/dist/staging -DDOCS_DIR=<仓库根> packaging/windows/installer.nsi
 
 # Windows MSI（WiX 5：dotnet tool install --global wix --version 5.*）
-wix build -arch x64 -d SourceDir=<仓库根>/dist/staging -d ProductVersion=0.1.0 \
-  -o dist/PacketSniffer.msi packaging/windows/product.wxs
+wix build -arch x64 -d SourceDir=<仓库根>/dist/staging -d IconDir=<仓库根>/assets/icons/ \
+  -d ProductVersion=0.1.0 -o dist/PacketSniffer.msi packaging/windows/product.wxs
 
 # winget / Scoop / Chocolatey 清单（需要 Chocolatey）
 pwsh packaging/windows/make-manifests.ps1 -Version 1.2.3 -DistDir dist
@@ -369,13 +370,15 @@ pwsh packaging/windows/make-manifests.ps1 -Version 1.2.3 -DistDir dist
 
 ## 十二、已知限制
 
-- 仅解析 HTTP/1.1；HTTP/2、WebSocket、gRPC 尚未支持（MITM 的 ALPN 固定为 `http/1.1`）。
+- 抓取协议：客户端与上游都支持 HTTP/1.1 / HTTP/2（明文 h2c 与 TLS ALPN），两侧独立协商，因此 `version` 里请求记客户端协议、响应记上游协议。
+- 只有上游 HTTP/2 连接会进入连接池；HTTP/1.1 上游仍按请求新建（一条 h1 连接同时只能跑一个请求）。
+- HTTP/1.1 只有在响应声明 `Trailer` 时才允许携带尾部首部，把 h2 的尾部首部转给 h1 客户端时可能被丢弃；抓包记录始终保留。
+- WebSocket（依赖 HTTP Upgrade 抓帧）尚未支持；gRPC 走端到端 HTTP/2 已可抓包。请求方向的 trailers 暂不采集。
 - 响应记录在客户端消费完 body（或达到 120s 空闲超时）后入库，因此列表会先出现「进行中」条目。
 - 根证书需系统信任；`install-ca` 封装了平台命令，但系统授权对话框仍需用户确认。
 - 规则引擎支持阻断、模拟响应与首部改写；断点、请求改写与重发未实现。
 - 历史记录、高亮与备注已持久化；多选与「按规则自动高亮」未实现。
 - Linux 的系统代理仅覆盖 GNOME `gsettings`，根证书通过 NSS 数据库安装。
-- `ui-legacy/` 为早期 TSX 原型，不参与构建，也不随产物分发。
 - 未提供 Alpine `apk`（需 musl 构建环境）与 Flatpak / Snap（沙箱会限制系统代理接管与根证书安装）。
 
 ## 十三、安全提示

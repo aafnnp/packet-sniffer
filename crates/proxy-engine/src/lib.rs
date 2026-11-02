@@ -27,6 +27,9 @@ pub use store::MemoryStore;
 /// 事件广播缓冲：UI 消费不及时时只影响积压事件，不阻塞网络线程。
 const EVENT_BUFFER: usize = 1024;
 
+/// 上游连接池的回收周期。
+const POOL_PRUNE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 /// 代理返回给客户端的 body 类型。
 pub type ProxyBody = BoxBody<Bytes, BoxError>;
@@ -60,6 +63,8 @@ pub(crate) struct ProxyContext {
     pub events: broadcast::Sender<EngineEvent>,
     pub ca: Arc<mitm::ca::CertificateAuthority>,
     pub tls_client: Arc<rustls::ClientConfig>,
+    /// 上游 HTTP/2 连接池，按目标复用连接。
+    pub pool: proxy::pool::UpstreamPool,
     /// 实际绑定的地址（`--port 0` 时由系统分配），用于识别「请求打到代理自己」。
     bound_addr: OnceLock<SocketAddr>,
 }
@@ -111,6 +116,10 @@ impl ProxyEngine {
             None => Vec::new(),
         };
         let tls_client = mitm::tls::client_config(&extra_roots);
+        let pool = proxy::pool::UpstreamPool::new(
+            config.upstream_pool_idle,
+            config.upstream_pool_max_per_host,
+        );
 
         Ok(Self {
             ctx: Arc::new(ProxyContext {
@@ -119,6 +128,7 @@ impl ProxyEngine {
                 events,
                 ca,
                 tls_client,
+                pool,
                 bound_addr: OnceLock::new(),
             }),
             shutdown: CancellationToken::new(),
@@ -161,6 +171,20 @@ impl ProxyEngine {
         self.ctx.emit(EngineEvent::Started {
             listen_addr: addr.to_string(),
             ca_cert_path: self.ctx.ca.cert_path().display().to_string(),
+        });
+
+        // 定期回收空闲或已关闭的上游连接，避免连接池长期占用上游资源。
+        let prune_ctx = self.ctx.clone();
+        let prune_shutdown = self.shutdown.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(POOL_PRUNE_INTERVAL);
+            ticker.tick().await;
+            loop {
+                tokio::select! {
+                    _ = prune_shutdown.cancelled() => break,
+                    _ = ticker.tick() => prune_ctx.pool.prune(),
+                }
+            }
         });
 
         proxy::tcp::serve(listener, self.ctx.clone(), self.shutdown.clone()).await;

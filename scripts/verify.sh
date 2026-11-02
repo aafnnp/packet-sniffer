@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# 端到端自检：监听 / 状态页 / 明文抓包 / HTTPS 解密 / 链式代理 / 证书信任
-# 用法：scripts/verify.sh [代理地址] [上游代理地址]
+# 端到端自检：监听 / 状态页 / 明文抓包 / HTTPS 解密 / 证书信任 / 系统代理
+# 用法：scripts/verify.sh [代理地址]
 set -uo pipefail
 
 PROXY_URL="${1:-http://127.0.0.1:8899}"
-UPSTREAM="${2:-127.0.0.1:8118}"
 PORT="${PROXY_URL##*:}"
 CA="${HOME}/.packet-sniffer/certs/root-ca.pem"
 pass=0
@@ -58,18 +57,7 @@ else
 fi
 rm -rf "$leaf_dir"
 
-echo "== 6. 链式代理 =="
-ip_engine="$(proxied --cacert "$CA" https://api.ipify.org 2>/dev/null || true)"
-ip_direct="$(curl -sS --max-time 25 -x "http://$UPSTREAM" https://api.ipify.org 2>/dev/null || true)"
-if [ -n "$ip_engine" ] && [ "$ip_engine" = "$ip_direct" ]; then
-  ok "出口 IP 与上游 $UPSTREAM 一致：$ip_engine"
-elif [ -n "$ip_engine" ]; then
-  bad "出口 IP 不一致（引擎 $ip_engine / 上游 ${ip_direct:-不可用}），可能没走链式代理"
-else
-  bad "无法取得出口 IP（网络或上游不可用）"
-fi
-
-echo "== 7. 系统代理 =="
+echo "== 6. 系统代理 =="
 effective="$(scutil --proxy | awk '/HTTPSProxy|HTTPProxy/{print; exit}')"
 sysproxy="$(networksetup -getsecurewebproxy Wi-Fi 2>/dev/null | awk '/Enabled|Port/{printf "%s ", $0}')"
 if grep -q "8899" <<<"$sysproxy"; then

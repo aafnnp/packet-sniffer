@@ -93,17 +93,12 @@ fn section_heading(title: &'static str, note: &'static str) -> impl IntoElement 
 fn proxy_section(ctx: Ctx) -> impl IntoElement {
     let ctx_port_value = ctx;
     let ctx_port_change = ctx;
-    let ctx_upstream_value = ctx;
-    let ctx_upstream_change = ctx;
     let ctx_max_value = ctx;
     let ctx_max_change = ctx;
     let ctx_capture = ctx;
     let ctx_system = ctx;
     card()
-        .child(section_heading(
-            "代理",
-            "更改监听端口或上游代理后会自动重启引擎。",
-        ))
+        .child(section_heading("代理", "更改监听端口后会自动重启引擎。"))
         .child(field_row(
             "监听端口",
             "本机代理端口，系统代理会指向它",
@@ -121,27 +116,6 @@ fn proxy_section(ctx: Ctx) -> impl IntoElement {
                 .on_change(move |value: &str| {
                     let value = value.to_string();
                     ctx_port_change.act(|m| m.set_draft_port(value));
-                }),
-        ))
-        .child(field_row(
-            "上游代理",
-            "留空表示直连，例如 127.0.0.1:8118",
-            input()
-                .w(px(260.0))
-                .h(px(28.0))
-                .px(px(8.0))
-                .rounded(px(radius::CONTROL))
-                .bg(colors::RAISED)
-                .border_1()
-                .border_color(colors::BORDER)
-                .text_size(px(12.0))
-                .text_color(colors::TEXT)
-                .placeholder("http://127.0.0.1:8118")
-                .placeholder_color(color(colors::FAINT))
-                .value(move || ctx_upstream_value.read(|m| m.draft.upstream.clone()))
-                .on_change(move |value: &str| {
-                    let value = value.to_string();
-                    ctx_upstream_change.act(|m| m.set_draft_upstream(value));
                 }),
         ))
         .child(field_row(

@@ -25,7 +25,7 @@
 !endif
 
 !ifndef DOCS_DIR
-  !error "缺少 DOCS_DIR：请用 -DDOCS_DIR=<绝对路径> 指向 README.md 与 LICENSE 所在目录"
+  !error "缺少 DOCS_DIR：请用 -DDOCS_DIR=<绝对路径> 指向仓库根目录（README.md / LICENSE / assets 所在处）"
 !endif
 
 ; Windows 的 FindFirstFile 不认正斜杠，所以默认用 \；POSIX 版 makensis 本地验证时传 -DSEP=/
@@ -37,6 +37,7 @@
 !define APP_PUBLISHER "aafnnp"
 !define APP_EXE "packet-sniffer-ui.exe"
 !define APP_CLI "packet-sniffer.exe"
+!define APP_ICON "${DOCS_DIR}${SEP}assets${SEP}icons${SEP}packet-sniffer.ico"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\PacketSniffer"
 
 Name "${APP_NAME} ${APP_VERSION}"
@@ -50,6 +51,8 @@ SetCompressor /SOLID lzma
 !include "MUI2.nsh"
 
 !define MUI_ABORTWARNING
+!define MUI_ICON "${APP_ICON}"
+!define MUI_UNICON "${APP_ICON}"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${APP_EXE}"
 !define MUI_FINISHPAGE_RUN_TEXT "立即启动 ${APP_NAME}"
 

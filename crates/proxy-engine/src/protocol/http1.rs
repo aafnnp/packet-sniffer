@@ -3,7 +3,7 @@
 use common::types::{Header, Scheme};
 use common::utils::split_authority;
 use common::CommonError;
-use http::header::HeaderMap;
+use http::header::{HeaderMap, HeaderValue};
 use http::{StatusCode, Uri, Version};
 
 /// 请求的实际转发目标。
@@ -30,13 +30,15 @@ impl RequestTarget {
 }
 
 /// 逐跳首部，转发时必须按方向重新生成，不能原样透传。
+///
+/// `te` 单独处理：它在 HTTP/1.1 里是逐跳首部，但 HTTP/2 允许 `te: trailers`，
+/// 而 gRPC 依赖该取值声明自己接受尾部首部，因此这一种取值要保留。
 const HOP_BY_HOP: &[&str] = &[
     "connection",
     "proxy-connection",
     "keep-alive",
     "proxy-authenticate",
     "proxy-authorization",
-    "te",
     "trailer",
     "transfer-encoding",
     "upgrade",
@@ -146,12 +148,27 @@ pub fn filter_headers(headers: &HeaderMap) -> HeaderMap {
     let mut filtered = HeaderMap::new();
     for (name, value) in headers.iter() {
         let lower = name.as_str().to_ascii_lowercase();
+        if lower == "te" {
+            if declares_trailers(value) {
+                filtered.append(name.clone(), value.clone());
+            }
+            continue;
+        }
         if HOP_BY_HOP.contains(&lower.as_str()) || announced.contains(&lower) {
             continue;
         }
         filtered.append(name.clone(), value.clone());
     }
     filtered
+}
+
+/// `TE` 是否只声明了 `trailers`（HTTP/2 中唯一合法的取值）。
+fn declares_trailers(value: &HeaderValue) -> bool {
+    value.to_str().is_ok_and(|value| {
+        value
+            .split(',')
+            .all(|token| token.trim().eq_ignore_ascii_case("trailers"))
+    })
 }
 
 #[cfg(test)]
@@ -219,6 +236,21 @@ mod tests {
         assert!(filtered.get("x-custom").is_none());
         assert!(filtered.get("proxy-connection").is_none());
         assert_eq!(filtered.get("content-type").unwrap(), "text/plain");
+    }
+
+    #[test]
+    fn keeps_te_trailers_but_drops_other_te_values() {
+        let mut headers = HeaderMap::new();
+        headers.insert("te", HeaderValue::from_static("trailers"));
+        assert_eq!(
+            filter_headers(&headers).get("te").unwrap(),
+            "trailers",
+            "HTTP/2 与 gRPC 依赖 TE: trailers"
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert("te", HeaderValue::from_static("gzip, deflate"));
+        assert!(filter_headers(&headers).get("te").is_none());
     }
 
     #[test]

@@ -15,7 +15,6 @@ use desktop::bridge::EventBridge;
 use desktop::state::{Settings, Theme as AppearanceSetting, default_settings_path};
 use desktop::storage::{Annotation, Highlight, HistoryStore, default_history_path};
 use proxy_engine::ProxyEngine;
-use proxy_engine::config::UpstreamProxy;
 
 use crate::format;
 use crate::ui::icons::IconName;
@@ -250,7 +249,6 @@ pub struct Model {
 #[derive(Debug, Clone)]
 pub struct SettingsDraft {
     pub port: String,
-    pub upstream: String,
     pub max_body_mb: String,
     pub capture: bool,
     pub system_proxy: bool,
@@ -261,11 +259,6 @@ impl SettingsDraft {
     fn from_settings(settings: &Settings) -> Self {
         Self {
             port: settings.listen_addr.port().to_string(),
-            upstream: settings
-                .upstream_proxy
-                .as_ref()
-                .map(UpstreamProxy::authority)
-                .unwrap_or_default(),
             max_body_mb: (settings.max_body_bytes / (1024 * 1024)).max(1).to_string(),
             capture: settings.capture_enabled,
             system_proxy: settings.system_proxy,
@@ -876,10 +869,6 @@ impl Model {
         self.draft.port = value;
     }
 
-    pub fn set_draft_upstream(&mut self, value: String) {
-        self.draft.upstream = value;
-    }
-
     pub fn set_draft_max_body(&mut self, value: String) {
         self.draft.max_body_mb = value;
     }
@@ -906,21 +895,10 @@ impl Model {
             self.settings_message = Some((false, "端口与正文上限必须是数字".to_string()));
             return;
         };
-        let upstream = if self.draft.upstream.trim().is_empty() {
-            None
-        } else {
-            match UpstreamProxy::parse(self.draft.upstream.trim()) {
-                Ok(proxy) => Some(proxy),
-                Err(error) => {
-                    self.settings_message = Some((false, format!("上游代理无效：{error}")));
-                    return;
-                }
-            }
-        };
         let capture = self.draft.capture;
         let system_proxy = self.draft.system_proxy;
         let appearance = self.draft.appearance;
-        self.apply_settings(port, capture, system_proxy, max_body, upstream, appearance);
+        self.apply_settings(port, capture, system_proxy, max_body, appearance);
     }
 
     pub fn set_auto_select(&mut self, value: bool) {
@@ -1062,7 +1040,6 @@ impl Model {
         capture: bool,
         system_proxy: bool,
         max_body_mb: usize,
-        upstream: Option<UpstreamProxy>,
         appearance: AppearanceSetting,
     ) {
         let was_running = self.engine.is_some();
@@ -1073,7 +1050,6 @@ impl Model {
         self.settings.capture_enabled = capture;
         self.settings.system_proxy = system_proxy;
         self.settings.max_body_bytes = max_body_mb.max(1) * 1024 * 1024;
-        self.settings.upstream_proxy = upstream;
         self.settings.theme = appearance;
         self.detail_dirty = true;
         let saved = self.settings.save(&default_settings_path());
@@ -1341,6 +1317,7 @@ mod tests {
                 body: br#"{"ok":true}"#.to_vec(),
                 body_truncated: false,
                 body_complete: true,
+                trailers: Vec::new(),
                 received_at: Utc::now(),
             }),
             error: None,
@@ -1469,6 +1446,7 @@ mod tests {
                     body: Vec::new(),
                     body_truncated: false,
                     body_complete: true,
+                    trailers: Vec::new(),
                     received_at: Utc::now(),
                 }),
                 error: None,
@@ -1487,6 +1465,7 @@ mod tests {
                     body: Vec::new(),
                     body_truncated: false,
                     body_complete: true,
+                    trailers: Vec::new(),
                     received_at: Utc::now(),
                 }),
                 error: None,

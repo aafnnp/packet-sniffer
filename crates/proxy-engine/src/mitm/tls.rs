@@ -12,8 +12,18 @@ use rustls_pki_types::CertificateDer;
 use crate::mitm::ca::CertificateAuthority;
 use crate::EngineError;
 
-/// 客户端只支持 HTTP/1.1，ALPN 固定为 `http/1.1`。
+/// 上游客户端 ALPN：优先 HTTP/2，站点不支持时回退 HTTP/1.1。
+const ALPN_H2: &[u8] = b"h2";
+/// HTTP/1.1 协议标识。
 const ALPN_HTTP1: &[u8] = b"http/1.1";
+
+/// 与客户端（浏览器 / 应用）和上游站点协商时都声明支持的协议。
+pub const SERVER_ALPN: [&[u8]; 2] = [ALPN_H2, ALPN_HTTP1];
+
+/// 协商结果是否为 HTTP/2。
+pub fn is_http2(alpn: Option<&[u8]>) -> bool {
+    alpn == Some(ALPN_H2)
+}
 
 fn provider() -> Arc<CryptoProvider> {
     Arc::new(rustls::crypto::ring::default_provider())
@@ -45,7 +55,7 @@ pub fn server_config(ca: Arc<CertificateAuthority>) -> Arc<ServerConfig> {
         .expect("ring provider 一定支持默认协议版本")
         .with_no_client_auth()
         .with_cert_resolver(Arc::new(DynamicCertResolver { ca }));
-    config.alpn_protocols = vec![ALPN_HTTP1.to_vec()];
+    config.alpn_protocols = SERVER_ALPN.iter().map(|alpn| alpn.to_vec()).collect();
     Arc::new(config)
 }
 
@@ -83,7 +93,7 @@ pub fn client_config(extra_roots: &[CertificateDer<'static>]) -> Arc<ClientConfi
         .expect("ring provider 一定支持默认协议版本")
         .with_root_certificates(roots)
         .with_no_client_auth();
-    config.alpn_protocols = vec![ALPN_HTTP1.to_vec()];
+    config.alpn_protocols = SERVER_ALPN.iter().map(|alpn| alpn.to_vec()).collect();
     Arc::new(config)
 }
 
@@ -99,10 +109,21 @@ mod tests {
         let ca = Arc::new(CertificateAuthority::load_or_create(&dir, "Test CA").unwrap());
 
         let server = server_config(ca);
-        assert_eq!(server.alpn_protocols, vec![b"http/1.1".to_vec()]);
+        assert_eq!(
+            server.alpn_protocols,
+            vec![b"h2".to_vec(), b"http/1.1".to_vec()],
+            "服务端应先声明 h2，再回退 h1"
+        );
+        assert!(is_http2(Some(b"h2")));
+        assert!(!is_http2(Some(b"http/1.1")));
+        assert!(!is_http2(None));
 
         let client = client_config(&[]);
-        assert!(!client.alpn_protocols.is_empty());
+        assert_eq!(
+            client.alpn_protocols,
+            vec![b"h2".to_vec(), b"http/1.1".to_vec()],
+            "上游同样先尝试 h2，再回退 h1"
+        );
 
         fs::remove_dir_all(&dir).ok();
     }

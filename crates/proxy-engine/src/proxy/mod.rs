@@ -2,5 +2,6 @@
 
 pub mod connect;
 pub mod http;
+pub mod pool;
 pub mod tcp;
 pub mod upstream;

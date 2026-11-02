@@ -70,32 +70,6 @@ pub fn preview_text(body: &[u8], limit: usize) -> String {
     text
 }
 
-/// 标准 Base64 编码（RFC 4648，带 `=` 补齐），用于上游代理的 Basic 认证头。
-pub fn base64_encode(input: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
-    for chunk in input.chunks(3) {
-        let byte0 = chunk[0] as u32;
-        let byte1 = *chunk.get(1).unwrap_or(&0) as u32;
-        let byte2 = *chunk.get(2).unwrap_or(&0) as u32;
-        let triple = (byte0 << 16) | (byte1 << 8) | byte2;
-
-        out.push(TABLE[(triple >> 18) as usize & 0x3f] as char);
-        out.push(TABLE[(triple >> 12) as usize & 0x3f] as char);
-        out.push(if chunk.len() > 1 {
-            TABLE[(triple >> 6) as usize & 0x3f] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            TABLE[triple as usize & 0x3f] as char
-        } else {
-            '='
-        });
-    }
-    out
-}
-
 /// 判断 body 是否大概率是可读文本（用于 UI 选择文本 / 十六进制视图）。
 pub fn looks_like_text(body: &[u8]) -> bool {
     let sample = &body[..body.len().min(512)];
@@ -143,18 +117,6 @@ mod tests {
         assert_eq!(format_bytes(512), "512 B");
         assert_eq!(format_bytes(1536), "1.5 KB");
         assert_eq!(format_bytes(5 * 1024 * 1024), "5.0 MB");
-    }
-
-    #[test]
-    fn base64_matches_reference_vectors() {
-        assert_eq!(base64_encode(b""), "");
-        assert_eq!(base64_encode(b"f"), "Zg==");
-        assert_eq!(base64_encode(b"fo"), "Zm8=");
-        assert_eq!(base64_encode(b"foo"), "Zm9v");
-        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
-        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
-        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
-        assert_eq!(base64_encode(b"user:pass"), "dXNlcjpwYXNz");
     }
 
     #[test]

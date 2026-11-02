@@ -301,9 +301,11 @@ jobs:
         shell: pwsh
         run: |
           $stage = (Join-Path (Get-Location) 'dist\staging') + '\'
+          $icons = (Join-Path (Get-Location) 'assets\icons') + '\'
           $msi = Join-Path (Get-Location) "dist\PacketSniffer-${{ steps.version.outputs.version }}-${{ matrix.app_arch }}.msi"
           wix build -arch x64 `
             -d "SourceDir=$stage" `
+            -d "IconDir=$icons" `
             -d "ProductVersion=${{ steps.version.outputs.num_version }}" `
             -o $msi `
             packaging\windows\product.wxs

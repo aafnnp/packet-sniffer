@@ -128,6 +128,9 @@ pub struct CapturedResponse {
     pub body: Vec<u8>,
     pub body_truncated: bool,
     pub body_complete: bool,
+    /// 响应尾部首部（HTTP/2 与 gRPC 用它承载 `grpc-status` 等元数据）。
+    #[serde(default)]
+    pub trailers: Vec<Header>,
     pub received_at: DateTime<Utc>,
 }
 

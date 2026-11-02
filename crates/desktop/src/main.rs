@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use common::types::{CapturedExchange, EngineEvent};
-use proxy_engine::config::UpstreamProxy;
 use proxy_engine::ProxyEngine;
 use system_bridge::{cert, proxy as system_proxy};
 
@@ -37,7 +36,6 @@ packet-sniffer —— 基于 NSH 的抓包工具
   --ca-dir <目录>        根证书目录
   --settings <文件>      设置文件路径
   --no-capture           只转发，不解密 HTTPS
-  --upstream-proxy <地址> 链式代理，如 http://127.0.0.1:8118 或 http://user:pass@host:port
   --max-body <字节>      单个 body 抓取上限
   --store-capacity <条>  内存存储条数上限
   --json                 run 模式下额外输出完整记录的 JSON 行
@@ -69,7 +67,6 @@ struct RunOptions {
     capture: Option<bool>,
     max_body_bytes: Option<usize>,
     store_capacity: Option<usize>,
-    upstream_proxy: Option<UpstreamProxy>,
     json: bool,
 }
 
@@ -133,11 +130,6 @@ impl Command {
                     let value = take_value(rest, &mut index, "--store-capacity")?;
                     options.store_capacity = Some(value.parse().context("无效的存储容量")?);
                 }
-                "--upstream-proxy" => {
-                    let value = take_value(rest, &mut index, "--upstream-proxy")?;
-                    options.upstream_proxy =
-                        Some(UpstreamProxy::parse(&value).map_err(|err| anyhow!("{err}"))?);
-                }
                 "--no-capture" => options.capture = Some(false),
                 "--capture" => options.capture = Some(true),
                 "--json" => options.json = true,
@@ -194,9 +186,6 @@ fn resolve_settings(options: &RunOptions) -> Settings {
     }
     if let Some(store_capacity) = options.store_capacity {
         settings.store_capacity = store_capacity;
-    }
-    if let Some(upstream_proxy) = options.upstream_proxy.clone() {
-        settings.upstream_proxy = Some(upstream_proxy);
     }
     settings
 }
@@ -435,20 +424,6 @@ mod tests {
         assert!(Command::parse(&args(&["nope"])).is_err());
         assert!(Command::parse(&args(&["run", "--port"])).is_err());
         assert!(Command::parse(&args(&["run", "--port", "abc"])).is_err());
-    }
-
-    #[test]
-    fn parses_upstream_proxy_flag() {
-        let command =
-            Command::parse(&args(&["run", "--upstream-proxy", "http://127.0.0.1:8118"])).unwrap();
-        match command {
-            Command::Run(options) => {
-                let proxy = options.upstream_proxy.expect("应解析出上游代理");
-                assert_eq!(proxy.authority(), "127.0.0.1:8118");
-            }
-            other => panic!("应解析为 Run，实际为 {other:?}"),
-        }
-        assert!(Command::parse(&args(&["run", "--upstream-proxy", "socks5://x:1"])).is_err());
     }
 
     #[test]

@@ -26,6 +26,8 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources" "$OUT_DIR"
 install -m 0755 "$BIN_DIR/packet-sniffer-ui" "$APP_DIR/Contents/MacOS/packet-sniffer-ui"
 install -m 0755 "$BIN_DIR/packet-sniffer" "$APP_DIR/Contents/MacOS/packet-sniffer"
 cp "$ROOT_DIR/README.md" "$ROOT_DIR/LICENSE" "$APP_DIR/Contents/Resources/"
+install -m 0644 "$ROOT_DIR/assets/icons/packet-sniffer.icns" \
+  "$APP_DIR/Contents/Resources/AppIcon.icns"
 sed -e "s/__APP_VERSION__/$BUNDLE_VERSION/g" \
   "$ROOT_DIR/packaging/macos/Info.plist" > "$APP_DIR/Contents/Info.plist"
 

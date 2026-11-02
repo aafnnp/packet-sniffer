@@ -6,7 +6,7 @@
 set -euo pipefail
 
 TAG="${1:?用法: release-notes.sh <tag> [owner/repo]}"
-REPO="${2:-${GITHUB_REPOSITORY:-aafnnp/package-sniffer}}"
+REPO="${2:-${GITHUB_REPOSITORY:-aafnnp/packet-sniffer}}"
 VERSION="${TAG#v}"
 
 if PREV="$(git describe --tags --abbrev=0 --match 'v*' "${TAG}^" 2>/dev/null)"; then

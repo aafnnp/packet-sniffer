@@ -8,8 +8,11 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll};
 
 use bytes::{Bytes, BytesMut};
+use common::types::Header;
 use hyper::body::{Body, Frame, SizeHint};
 use tokio::sync::oneshot;
+
+use crate::protocol::http1::header_map_to_headers;
 
 #[derive(Debug)]
 struct RecorderState {
@@ -17,6 +20,7 @@ struct RecorderState {
     limit: usize,
     truncated: bool,
     finished: bool,
+    trailers: Vec<Header>,
 }
 
 /// 录制快照。
@@ -25,6 +29,8 @@ pub struct RecordedBody {
     pub bytes: Vec<u8>,
     pub truncated: bool,
     pub finished: bool,
+    /// body 之后的尾部首部，只有 HTTP/2 与分块编码的响应才会出现。
+    pub trailers: Vec<Header>,
 }
 
 impl RecordedBody {
@@ -54,6 +60,7 @@ impl BodyRecorder {
                 limit,
                 truncated: false,
                 finished: false,
+                trailers: Vec::new(),
             })),
             done_tx: Arc::new(Mutex::new(Some(done_tx))),
         };
@@ -76,6 +83,12 @@ impl BodyRecorder {
         } else {
             state.buffer.extend_from_slice(chunk);
         }
+    }
+
+    /// 记录尾部首部。尾部首部不计入 body 长度上限，但会整体保留。
+    pub fn record_trailers(&self, trailers: &http::HeaderMap) {
+        let mut state = self.lock();
+        state.trailers = header_map_to_headers(trailers);
     }
 
     /// 标记 body 结束（正常读完或出错），只通知一次。
@@ -103,6 +116,7 @@ impl BodyRecorder {
             bytes: state.buffer.to_vec(),
             truncated: state.truncated,
             finished: state.finished,
+            trailers: state.trailers.clone(),
         }
     }
 }
@@ -140,6 +154,9 @@ where
             Poll::Ready(Some(Ok(frame))) => {
                 if let Some(data) = frame.data_ref() {
                     this.recorder.record(data);
+                }
+                if let Some(trailers) = frame.trailers_ref() {
+                    this.recorder.record_trailers(trailers);
                 }
                 Poll::Ready(Some(Ok(frame)))
             }
@@ -194,6 +211,28 @@ mod tests {
         assert_eq!(snapshot.bytes, b"hell");
         assert!(snapshot.truncated);
         assert!(snapshot.finished);
+        assert!(snapshot.trailers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn records_trailers_separately_from_body() {
+        use http::HeaderValue;
+
+        let (recorder, _done) = BodyRecorder::new(64);
+        let mut trailers = http::HeaderMap::new();
+        trailers.insert("grpc-status", HeaderValue::from_static("0"));
+        recorder.record(b"payload");
+        recorder.record_trailers(&trailers);
+        recorder.finish();
+
+        let snapshot = recorder.snapshot();
+        assert_eq!(snapshot.bytes, b"payload");
+        assert!(!snapshot.truncated);
+        assert_eq!(
+            snapshot.trailers,
+            vec![Header::new("grpc-status", "0")],
+            "尾部首部应单独保存"
+        );
     }
 
     #[tokio::test]

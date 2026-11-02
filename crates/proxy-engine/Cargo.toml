@@ -21,7 +21,6 @@ hyper-util.workspace = true
 http.workspace = true
 http-body-util.workspace = true
 bytes.workspace = true
-url.workspace = true
 flate2.workspace = true
 brotli.workspace = true
 
