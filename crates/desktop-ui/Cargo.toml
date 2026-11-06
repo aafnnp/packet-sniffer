@@ -18,6 +18,7 @@ desktop = { path = "../desktop" }
 common = { path = "../common" }
 proxy-engine = { path = "../proxy-engine" }
 system-bridge = { path = "../system-bridge" }
+updater = { path = "../updater" }
 
 nsh-core.workspace = true
 nsh-base.workspace = true

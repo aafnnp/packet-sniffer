@@ -1,0 +1,20 @@
+[package]
+name = "updater"
+description = "应用自更新：检查 GitHub Release、校验下载并替换本机安装"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+semver.workspace = true
+sha2.workspace = true
+ureq.workspace = true
+flate2.workspace = true
+tar.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

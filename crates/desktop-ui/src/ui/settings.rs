@@ -10,7 +10,7 @@ use nsh_core::{
 use desktop::state::Theme as AppearanceSetting;
 use desktop::storage::default_history_path;
 
-use crate::model::View as AppView;
+use crate::model::{UpdateState, View as AppView};
 use crate::theme::{colors, radius};
 use crate::ui::icons::{IconName, icon};
 use crate::ui::widgets::{Ctx, accent_button, icon_button, subtle_button, toggle};
@@ -59,6 +59,7 @@ pub fn settings_page(ctx: Ctx) -> impl IntoElement {
                         .child(proxy_section(ctx))
                         .child(appearance_section(ctx))
                         .child(cert_section(ctx))
+                        .child(update_section(ctx))
                         .child(data_section(ctx))
                         .child(about_section(ctx))
                         .child(message(ctx)),
@@ -333,6 +334,108 @@ fn data_section(ctx: Ctx) -> impl IntoElement {
                 )
                 .child(subtle_button("清空历史数据库", clear)),
         )
+}
+
+fn update_section(ctx: Ctx) -> impl IntoElement {
+    let check = { move || ctx.act(|m| m.check_update()) };
+    let install = { move || ctx.act(|m| m.install_update()) };
+    let release_page = move || {
+        let url = match &ctx.read(|m| m.update.clone()) {
+            UpdateState::Available(available) => available.release_url(),
+            _ => "https://github.com/aafnnp/packet-sniffer/releases/latest".to_owned(),
+        };
+        let _ = updater::open_url(&url);
+    };
+    card()
+        .child(section_heading(
+            "更新",
+            "从 GitHub Releases 获取新版本；绿色版会自动替换并重启。",
+        ))
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    text(move || format!("当前版本 v{}", updater::current_version()))
+                        .flex_1()
+                        .text_size(px(12.0))
+                        .text_color(colors::TEXT),
+                )
+                .child(
+                    when(move || ctx.read(|m| m.update.is_busy()), view)
+                        .otherwise(move || subtle_button("检查更新", check).into_element()),
+                )
+                .child(
+                    when(
+                        move || matches!(ctx.read(|m| m.update.clone()), UpdateState::Available(_)),
+                        move || accent_button("下载并安装", install).into_element(),
+                    )
+                    .otherwise(view),
+                )
+                .child(
+                    when(
+                        move || matches!(ctx.read(|m| m.update.clone()), UpdateState::Available(_)),
+                        move || subtle_button("打开发布页", release_page).into_element(),
+                    )
+                    .otherwise(view),
+                ),
+        )
+        .child(
+            text(move || update_status(&ctx.read(|m| m.update.clone())))
+                .text_size(px(11.0))
+                .text_color(move || match ctx.read(|m| m.update.clone()) {
+                    UpdateState::Failed(_) => colors::RED,
+                    _ => colors::MUTED,
+                }),
+        )
+        .child(
+            when(
+                move || match ctx.read(|m| m.update.clone()) {
+                    UpdateState::Available(available) => available.notes.is_some(),
+                    _ => false,
+                },
+                move || {
+                    let notes = ctx.read(|m| match &m.update {
+                        UpdateState::Available(available) => {
+                            available.notes.clone().unwrap_or_default()
+                        }
+                        _ => String::new(),
+                    });
+                    text(notes)
+                        .number_of_lines(8)
+                        .text_size(px(10.5))
+                        .text_color(colors::FAINT)
+                        .into_element()
+                },
+            )
+            .otherwise(view),
+        )
+}
+
+fn update_status(state: &UpdateState) -> String {
+    match state {
+        UpdateState::Idle => "尚未检查更新。".to_owned(),
+        UpdateState::Checking => "正在检查更新…".to_owned(),
+        UpdateState::UpToDate => format!("已是最新版本（v{}）。", updater::current_version()),
+        UpdateState::Available(available) => {
+            format!("发现新版本 v{}，可下载安装。", available.version)
+        }
+        UpdateState::Downloading {
+            version,
+            received,
+            total,
+        } => {
+            let percent = if *total == 0 {
+                0
+            } else {
+                received.saturating_mul(100) / total
+            };
+            format!("正在下载 v{version}：{percent}%")
+        }
+        UpdateState::Installed(message) => message.clone(),
+        UpdateState::Failed(error) => format!("更新失败：{error}"),
+    }
 }
 
 fn about_section(ctx: Ctx) -> impl IntoElement {

@@ -6,6 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Duration;
 
 use async_channel::Receiver;
@@ -186,6 +187,37 @@ pub struct Detail {
     pub comment: String,
 }
 
+/// 设置页里的更新状态。网络与安装都在后台线程完成，结果经 `poll` 搬回界面线程。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateState {
+    Idle,
+    Checking,
+    UpToDate,
+    Available(Box<updater::Available>),
+    Downloading {
+        version: String,
+        received: u64,
+        total: u64,
+    },
+    Installed(String),
+    Failed(String),
+}
+
+impl UpdateState {
+    pub fn is_busy(&self) -> bool {
+        matches!(
+            self,
+            UpdateState::Checking | UpdateState::Downloading { .. }
+        )
+    }
+}
+
+enum UpdateEvent {
+    Checked(Result<Option<Box<updater::Available>>, updater::Error>),
+    Progress { received: u64, total: u64 },
+    Installed(Result<updater::Outcome, updater::Error>),
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Status {
     pub label: String,
@@ -236,6 +268,8 @@ pub struct Model {
     pub annotations: HashMap<RequestId, Annotation>,
     pub history_count: usize,
     pub store: Option<HistoryStore>,
+    pub update: UpdateState,
+    update_events: Arc<Mutex<Vec<UpdateEvent>>>,
     clients_by_id: HashMap<RequestId, String>,
     detail_dirty: bool,
     ca_installed: bool,
@@ -334,6 +368,8 @@ impl Model {
             annotations,
             history_count,
             store,
+            update: UpdateState::Idle,
+            update_events: Arc::new(Mutex::new(Vec::new())),
             clients_by_id: HashMap::new(),
             detail_dirty: false,
             ca_installed: false,
@@ -389,10 +425,99 @@ impl Model {
             });
             changed = true;
         }
+        let update_events = self
+            .update_events
+            .lock()
+            .map(|mut events| std::mem::take(&mut *events))
+            .unwrap_or_default();
+        for event in update_events {
+            self.apply_update_event(event);
+            changed = true;
+        }
         if changed {
             self.refresh();
         }
         changed
+    }
+
+    fn apply_update_event(&mut self, event: UpdateEvent) {
+        match event {
+            UpdateEvent::Checked(Ok(None)) => self.update = UpdateState::UpToDate,
+            UpdateEvent::Checked(Ok(Some(available))) => {
+                self.update = UpdateState::Available(available);
+            }
+            UpdateEvent::Checked(Err(error)) => {
+                self.update = UpdateState::Failed(error.to_string())
+            }
+            UpdateEvent::Progress { received, total } => {
+                if let UpdateState::Downloading {
+                    received: current,
+                    total: current_total,
+                    ..
+                } = &mut self.update
+                {
+                    *current = received;
+                    *current_total = total;
+                }
+            }
+            UpdateEvent::Installed(Ok(
+                updater::Outcome::Replaced | updater::Outcome::Scheduled,
+            )) => {
+                self.update = UpdateState::Installed("更新已安装，正在重新启动…".to_owned());
+                std::process::exit(0);
+            }
+            UpdateEvent::Installed(Ok(outcome)) => {
+                self.update = UpdateState::Installed(outcome.message());
+            }
+            UpdateEvent::Installed(Err(error)) => {
+                self.update = UpdateState::Failed(error.to_string());
+            }
+        }
+    }
+
+    /// 在后台线程检查更新。
+    pub fn check_update(&mut self) {
+        if self.update.is_busy() {
+            return;
+        }
+        self.update = UpdateState::Checking;
+        let events = self.update_events.clone();
+        thread::spawn(move || {
+            let result = updater::check().map(|available| available.map(Box::new));
+            if let Ok(mut queue) = events.lock() {
+                queue.push(UpdateEvent::Checked(result));
+            }
+        });
+    }
+
+    /// 下载并安装已知的新版本；界面会在替换完成后自动重启。
+    pub fn install_update(&mut self) {
+        let UpdateState::Available(available) = self.update.clone() else {
+            return;
+        };
+        let version = available.version.to_string();
+        self.update = UpdateState::Downloading {
+            version: version.clone(),
+            received: 0,
+            total: 0,
+        };
+        let events = self.update_events.clone();
+        thread::spawn(move || {
+            let progress_events = events.clone();
+            let result = updater::apply(&available, true, |progress| {
+                if let Ok(mut queue) = progress_events.lock() {
+                    // 只保留最新一条进度，避免轮询间隔里堆积。
+                    queue.retain(|event| !matches!(event, UpdateEvent::Progress { .. }));
+                    queue.push(UpdateEvent::Progress {
+                        received: progress.received,
+                        total: progress.total,
+                    });
+                }
+            });
+            if let Ok(mut queue) = events.lock() {
+                queue.push(UpdateEvent::Installed(result));
+            }
+        });
     }
 
     fn apply_event(&mut self, event: EngineEvent) {

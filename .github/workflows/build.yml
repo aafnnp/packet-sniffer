@@ -379,6 +379,20 @@ jobs:
           scripts/release-notes.sh "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
           cat "$RUNNER_TEMP/notes.md"
 
+      # 应用内「检查更新」读取 latest.json：版本、说明、各平台包地址与 SHA-256。
+      - name: Generate update manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/update-manifest.sh \
+            --version "${GITHUB_REF_NAME#v}" \
+            --tag "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dist dist \
+            --notes "$RUNNER_TEMP/notes.md" \
+            --out dist/latest.json
+          cat dist/latest.json
+
       - name: Publish release assets
         shell: bash
         env:

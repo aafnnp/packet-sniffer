@@ -6,6 +6,7 @@
 // headless 模式下 UI 状态层只会用到一部分 API，接入 NSH 界面后这些未使用告警会消失。
 #![allow(dead_code)]
 
+use std::io::{self, Write as _};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -28,6 +29,7 @@ packet-sniffer —— 基于 NSH 的抓包工具
   packet-sniffer install-ca               安装根证书到系统信任存储
   packet-sniffer uninstall-ca             从系统信任存储移除根证书
   packet-sniffer system-proxy enable|disable
+  packet-sniffer update [--check] [-y]    检查更新，安装新版本
   packet-sniffer --help
 
 通用选项：
@@ -55,6 +57,7 @@ fn main() -> Result<()> {
         Command::InstallCa { options } => install_ca(&options),
         Command::UninstallCa { options } => uninstall_ca(&options),
         Command::SystemProxy { options, enable } => set_system_proxy(&options, enable),
+        Command::Update { check, yes } => update(check, yes),
     }
 }
 
@@ -77,6 +80,7 @@ enum Command {
     InstallCa { options: RunOptions },
     UninstallCa { options: RunOptions },
     SystemProxy { options: RunOptions, enable: bool },
+    Update { check: bool, yes: bool },
     Help,
 }
 
@@ -93,9 +97,24 @@ impl Command {
             "install-ca" => ("install-ca", &raw[1..]),
             "uninstall-ca" => ("uninstall-ca", &raw[1..]),
             "system-proxy" => ("system-proxy", &raw[1..]),
+            "update" => ("update", &raw[1..]),
             other if other.starts_with('-') => ("run", raw),
             other => bail!("未知子命令：{other}\n\n{USAGE}"),
         };
+
+        if subcommand == "update" {
+            let mut check = false;
+            let mut yes = false;
+            for argument in rest {
+                match argument.as_str() {
+                    "-h" | "--help" => return Ok(Command::Help),
+                    "--check" => check = true,
+                    "-y" | "--yes" => yes = true,
+                    other => bail!("未知参数：{other}\n\n{USAGE}"),
+                }
+            }
+            return Ok(Command::Update { check, yes });
+        }
 
         let mut options = RunOptions::default();
         let mut out: Option<PathBuf> = None;
@@ -152,6 +171,64 @@ impl Command {
             _ => unreachable!("子命令已在上方收敛"),
         })
     }
+}
+
+fn update(check_only: bool, yes: bool) -> Result<()> {
+    println!("当前版本：v{}", updater::current_version());
+    println!("正在检查更新…");
+    let available = match updater::check() {
+        Ok(Some(available)) => available,
+        Ok(None) => {
+            println!("已是最新版本。");
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+    };
+
+    println!("发现新版本：v{}", available.version);
+    if let Some(notes) = &available.notes {
+        println!("\n{}", notes.trim());
+    }
+    let strategy = updater::strategy(&available);
+    println!("\n安装方式：{strategy}");
+    if check_only {
+        return Ok(());
+    }
+    if strategy == updater::Strategy::Manual {
+        let url = available.release_url();
+        println!("请手动下载：{url}");
+        updater::open_url(&url).ok();
+        return Ok(());
+    }
+    if !yes && !confirm()? {
+        println!("已取消。");
+        return Ok(());
+    }
+
+    let mut last_tenth = u64::MAX;
+    let result = updater::apply(&available, false, |progress| {
+        let percent = progress.received.saturating_mul(100) / progress.total.max(1);
+        if percent / 10 != last_tenth / 10 {
+            last_tenth = percent;
+            print!("\r下载中 {percent}%");
+            let _ = io::stdout().flush();
+        }
+    });
+    match result {
+        Ok(outcome) => {
+            println!("\r{}", outcome.message());
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn confirm() -> Result<bool> {
+    print!("下载并安装更新？[y/N] ");
+    io::stdout().flush().context("输出提示失败")?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).context("读取输入失败")?;
+    Ok(matches!(input.trim(), "y" | "Y" | "yes" | "YES"))
 }
 
 fn take_value(args: &[String], index: &mut usize, flag: &str) -> Result<String> {

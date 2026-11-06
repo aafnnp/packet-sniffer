@@ -34,6 +34,7 @@
 | 请求记录 | 内存环形存储；图形界面另行写入 SQLite（WAL）持久化历史、高亮与备注，重启后恢复 |
 | 系统集成 | 接管 / 释放系统代理，安装 / 移除根证书，按平台条件编译 |
 | 双形态运行 | `packet-sniffer`（headless CLI）与 `packet-sniffer-ui`（NSH 原生图形界面）共用同一套状态机与事件桥 |
+| 应用更新 | 检查 GitHub Releases 的 `latest.json`，校验 SHA-256 后替换绿色版并重启；安装包版拉起 dmg / NSIS，包管理器安装则打开发布页 |
 | 跨平台 | macOS（Apple Silicon / Intel）、Windows x86_64、Linux x86_64 |
 
 ## 二、Workspace 结构
@@ -49,6 +50,7 @@ Proxy/
 │   └── themes/default-dark.json
 ├── scripts/
 │   ├── make-icons.sh           # 由 SVG 重新生成各平台图标
+│   ├── update-manifest.sh      # 生成 latest.json 自更新清单
 │   └── verify.sh               # 端到端自检脚本
 ├── crates/
 │   ├── common/                 # 跨包共享类型与工具，不依赖网络 / TLS / UI
@@ -68,6 +70,9 @@ Proxy/
 │   │   ├── src/bridge/         # 引擎事件 → async-channel 事件桥
 │   │   ├── src/state/          # 请求列表、设置读写
 │   │   └── src/storage.rs      # SQLite 历史记录、高亮与备注（供图形界面使用）
+│   ├── updater/                # 应用自更新：清单检查、校验下载、替换与重启
+│   │   ├── src/lib.rs          # 清单解析、版本比较、HTTP 下载与安装策略
+│   │   └── src/install.rs      # 解压、原地替换、Windows 延迟替换与回滚
 │   └── desktop-ui/             # NSH 原生图形界面
 │       ├── nsh.json            # NSH 应用描述（根组件 App）
 │       ├── build.rs            # Windows 下把图标与版本信息嵌入 exe
@@ -95,6 +100,7 @@ Proxy/
 | 存储与并发 | `rusqlite` 0.41（bundled）、`indexmap`、`async-channel` |
 | 日志与错误 | `tracing`、`tracing-subscriber`、`thiserror`、`anyhow`、`chrono`、`uuid` |
 | 原生界面 | `nsh-core` / `nsh-base` / `nsh-platform-macos` / `nsh-platform-linux` / `nsh-platform-windows` 0.3.0 |
+| 应用更新 | `semver`、`sha2`、`ureq` 3（rustls）、`tar` + `flate2`、`zip` |
 
 ## 三、环境要求
 
@@ -178,6 +184,7 @@ packet-sniffer export-ca [--out <文件>]  导出根证书（默认 root-ca.pem�
 packet-sniffer install-ca                安装根证书到系统信任存储
 packet-sniffer uninstall-ca              从系统信任存储移除根证书
 packet-sniffer system-proxy enable|disable
+packet-sniffer update [--check] [-y]     检查更新；默认交互确认后安装
 packet-sniffer --help
 ```
 
@@ -294,7 +301,7 @@ cargo build --release --workspace
 
 1. **test**（Ubuntu 24.04）：安装 GTK4 依赖，执行 `cargo fmt --check`、`cargo clippy --workspace --all-targets --locked`、`cargo test --workspace --locked`。
 2. **package**（矩阵）：`linux-x86_64`、`linux-aarch64`、`windows-x86_64`、`macos-universal`，编译后用 `nfpm`、`appimagetool`、`hdiutil`/`pkgbuild`、`NSIS`、`WiX` 生成各平台安装包。
-3. **release**（仅 `v*` 标签）：汇总全部产物，生成 `SHA256SUMS.txt` 与包管理器清单，发布到 GitHub Release。
+3. **release**（仅 `v*` 标签）：汇总全部产物，生成 `SHA256SUMS.txt`、`latest.json` 更新清单与包管理器清单，发布到 GitHub Release。
 
 ### 产物格式
 
@@ -368,7 +375,25 @@ wix build -arch x64 -d SourceDir=<仓库根>/dist/staging -d IconDir=<仓库根>
 pwsh packaging/windows/make-manifests.ps1 -Version 1.2.3 -DistDir dist
 ```
 
-## 十二、已知限制
+## 十二、应用更新
+
+界面「设置 → 更新」与 CLI 的 `packet-sniffer update` 共用 [`crates/updater`](crates/updater)：
+
+1. 读取 `https://github.com/aafnnp/packet-sniffer/releases/latest/download/latest.json`（不走 GitHub API，因此没有速率限制），清单包含版本、发布说明与各平台的包地址、大小、SHA-256。
+2. 版本高于当前 `Cargo.toml` 里的版本时提供更新；平台键为 `macos-universal`、`linux-x86_64`、`linux-aarch64`、`windows-x86_64`。
+3. 下载时边下边算 SHA-256，并校验大小；不一致就丢弃，不会安装。
+4. 安装策略：
+   - 绿色版（安装目录可写）：解压后替换 `packet-sniffer` / `packet-sniffer-ui`，替换前写 `.old` 备份；等本进程退出后拉起新界面，新进程启动成功再清理备份，失败则回滚或保留备份。
+   - Windows：运行中的 exe 无法直接覆盖，改为生成一个延迟替换脚本，等本进程退出后替换、失败时回滚并重启；`.old` 备份留在原目录。
+   - AppImage：设置 `APPIMAGE` 时用新 AppImage 覆盖自身。
+   - macOS `.app`、`Program Files` 等不可写安装：下载并打开对应 dmg / NSIS 安装包。
+   - 通过 deb / rpm / pacman 安装且没有可用安装包：打开发布页，由包管理器升级。
+
+发布时 [`scripts/update-manifest.sh`](scripts/update-manifest.sh) 根据 `dist/` 里实际存在的产物生成 `latest.json`，随 Release 一起上传。本地调试可把 `PACKET_SNIFFER_UPDATE_URL` 指向自己的清单地址（允许 `http://127.0.0.1`）。
+
+清单没有签名，完整性依赖 GitHub 账号与 HTTPS；发布权限被接管时攻击者也能改清单。
+
+## 十三、已知限制
 
 - 抓取协议：客户端与上游都支持 HTTP/1.1 / HTTP/2（明文 h2c 与 TLS ALPN），两侧独立协商，因此 `version` 里请求记客户端协议、响应记上游协议。
 - 只有上游 HTTP/2 连接会进入连接池；HTTP/1.1 上游仍按请求新建（一条 h1 连接同时只能跑一个请求）。
@@ -381,13 +406,13 @@ pwsh packaging/windows/make-manifests.ps1 -Version 1.2.3 -DistDir dist
 - Linux 的系统代理仅覆盖 GNOME `gsettings`，根证书通过 NSS 数据库安装。
 - 未提供 Alpine `apk`（需 musl 构建环境）与 Flatpak / Snap（沙箱会限制系统代理接管与根证书安装）。
 
-## 十三、安全提示
+## 十四、安全提示
 
 - 抓包数据包含完整请求 / 响应内容与凭据，`history.db` 与导出的 JSON 请按敏感数据保管。
 - `root-ca.key` 是签发任意站点证书的能力来源，切勿提交到版本库或分发给他人；`.gitignore` 已忽略 `certs/`。
 - 默认只监听 `127.0.0.1`。若改为对外监听，代理端口无认证，请自行加访问控制。
 - 只抓取自己有权调试的流量。
 
-## 十四、许可证
+## 十五、许可证
 
 [MIT](LICENSE)

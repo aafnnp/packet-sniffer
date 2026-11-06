@@ -5,12 +5,13 @@ members = [
     "crates/system-bridge",
     "crates/desktop",
     "crates/desktop-ui",
+    "crates/updater",
 ]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
-version = "0.2.0"
+version = "0.3.0"
 license = "MIT"
 
 [workspace.dependencies]
@@ -51,6 +52,13 @@ http-body-util = "0.1"
 url = "2.0"
 flate2 = "1.0"
 brotli = "6.0"
+
+# 应用自更新
+semver = "1.0"
+sha2 = "0.10"
+ureq = { version = "3.5", default-features = false, features = ["rustls", "gzip"] }
+tar = "0.4"
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 
 [profile.release]
 lto = "thin"
