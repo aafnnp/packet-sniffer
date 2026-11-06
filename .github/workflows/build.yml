@@ -89,7 +89,7 @@ jobs:
             targets: x86_64-pc-windows-msvc
             app_arch: x64
           - name: macos-universal
-            os: macos-14
+            os: macos-15
             target: aarch64-apple-darwin
             second_target: x86_64-apple-darwin
             targets: aarch64-apple-darwin,x86_64-apple-darwin
